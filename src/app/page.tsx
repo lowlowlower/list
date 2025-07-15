@@ -103,6 +103,11 @@ const TagList: React.FC<{
 
 // --- Main Page Component ---
 export default function AccountsPage() {
+    // --- Authentication State ---
+    const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+    const [passwordInput, setPasswordInput] = useState<string>('');
+    const [authError, setAuthError] = useState<string | null>(null);
+
     // State for accounts
     const [allAccounts, setAllAccounts] = useState<Account[]>([]); 
     const [loadingAccounts, setLoadingAccounts] = useState<boolean>(true);
@@ -139,6 +144,28 @@ export default function AccountsPage() {
     const [savingPrompt, setSavingPrompt] = useState<boolean>(false);
     const [promptError, setPromptError] = useState<string | null>(null);
     const [productSchedules, setProductSchedules] = useState<ProductSchedule[]>([]);
+
+
+    // --- Authentication Logic ---
+    useEffect(() => {
+        // Check session storage to see if user is already authenticated
+        if (sessionStorage.getItem('isAuthenticated') === 'true') {
+            setIsAuthenticated(true);
+        }
+    }, []);
+
+    const handlePasswordSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        // Simple password check, replace with a more secure method for production
+        if (passwordInput === '11111111') {
+            sessionStorage.setItem('isAuthenticated', 'true'); // Persist auth state
+            setIsAuthenticated(true);
+            setAuthError(null);
+            setPasswordInput('');
+        } else {
+            setAuthError('密码错误，请重试。');
+        }
+    };
 
 
     // --- Data Fetching ---
@@ -284,12 +311,14 @@ export default function AccountsPage() {
         }
     }, []);
 
-    // --- Initial Data Load ---
+    // --- Initial Data Load (run only after authentication) ---
     useEffect(() => {
-        fetchAccounts();
-        fetchGlobalPrompt();
-        fetchProductSchedules();
-    }, [fetchAccounts, fetchGlobalPrompt, fetchProductSchedules]);
+        if (isAuthenticated) {
+            fetchAccounts();
+            fetchGlobalPrompt();
+            fetchProductSchedules();
+        }
+    }, [isAuthenticated, fetchAccounts, fetchGlobalPrompt, fetchProductSchedules]);
 
 
     // --- Account Management ---
@@ -702,8 +731,41 @@ export default function AccountsPage() {
         setErrorKeywords(null);
     };
 
+    const handleBackFromKeywords = () => {
+        setSelectedAccountForKeywords(null);
+        setKeywordsForEditing([]);
+        setErrorKeywords(null);
+    };
+
 
     // --- RENDER LOGIC ---
+
+    // Render Password Lock View
+    if (!isAuthenticated) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
+                <div className="p-8 max-w-sm mx-auto bg-white dark:bg-gray-800 rounded-xl shadow-md space-y-4">
+                    <h1 className="text-xl font-bold text-center text-gray-900 dark:text-gray-100">请输入密码</h1>
+                    <form onSubmit={handlePasswordSubmit}>
+                        <input
+                            type="password"
+                            value={passwordInput}
+                            onChange={(e) => setPasswordInput(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            placeholder="Password"
+                        />
+                        {authError && <p className="text-red-500 text-sm mt-2">{authError}</p>}
+                        <button
+                            type="submit"
+                            className="w-full mt-4 px-4 py-2 bg-blue-500 text-white font-semibold rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-gray-800"
+                        >
+                            进入
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
 
     // Render Keyword Management View
     if (selectedAccountForKeywords) {
@@ -711,10 +773,10 @@ export default function AccountsPage() {
             <div className="p-5 font-sans bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
                  <div className="flex items-center gap-4 mb-4">
                     <button
-                        onClick={handleBackToAccounts}
+                        onClick={handleBackFromKeywords}
                         className="bg-gray-500 hover:bg-gray-600 text-white text-sm py-1.5 px-4 rounded-md cursor-pointer"
                     >
-                        ← 返回账户列表
+                        ← 返回
                     </button>
                     <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">
                         <span className="font-normal">管理关键词: </span>
@@ -821,6 +883,8 @@ export default function AccountsPage() {
                                     onDelete={handleDeleteProduct} 
                                     onDeploy={handleDeployProduct} 
                                     globalPrompt={globalPrompt} 
+                                    businessDescription={selectedAccountForProducts?.['业务描述'] || ''}
+                                    onManageAccountKeywords={() => handleAccountSelectForKeywords(selectedAccountForProducts!)}
                                     deployedTo={deployedTo} 
                                     isPending={isPending}
                                 />

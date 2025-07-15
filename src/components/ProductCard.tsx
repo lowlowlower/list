@@ -12,6 +12,7 @@ type Product = {
   created_at: string;
   '修改后文案': string | null;
   '价格': string | null;
+  'ai提取关键词': string | null;
   type: string | null;
   // Other fields are not directly used in this component but are part of the object
 };
@@ -21,6 +22,8 @@ interface ProductCardProps {
     onDelete: (id: string) => Promise<void>;
     onDeploy: (productId: string) => Promise<void>;
     globalPrompt: string;
+    businessDescription: string;
+    onManageAccountKeywords: () => void; // New prop for navigation
     deployedTo: string[]; // List of account names this product is already deployed to
     isPending: boolean;
 }
@@ -41,9 +44,12 @@ const getErrorMessage = (error: unknown): string => {
 };
 
 // --- Main Component ---
-const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, globalPrompt, deployedTo, isPending }) => {
+const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, globalPrompt, businessDescription, onManageAccountKeywords, deployedTo, isPending }) => {
     // Component State
     const [modifiedDescription, setModifiedDescription] = useState(product['修改后文案'] || product.result_text_content || '');
+    const [isDescriptionDirty, setIsDescriptionDirty] = useState(false);
+    const [aiKeywords, setAiKeywords] = useState(product['ai提取关键词'] || '');
+    const [isLoadingKeywords, setIsLoadingKeywords] = useState(false);
     const [newImageUrl, setNewImageUrl] = useState('');
     const [isOriginalCollapsed, setIsOriginalCollapsed] = useState(true);
     const [isLoadingAI, setIsLoadingAI] = useState(false);
@@ -56,6 +62,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
     // Reset state if product prop changes
     useEffect(() => {
         setModifiedDescription(product['修改后文案'] || product.result_text_content || '');
+        setIsDescriptionDirty(false);
+        setAiKeywords(product['ai提取关键词'] || '');
         setImageUrl(product.result_image_url);
         setCardError(null);
         setDeployError(null);
@@ -63,7 +71,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
     }, [product]);
 
     // --- Handlers ---
-    const handleDescriptionChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => setModifiedDescription(e.target.value);
+    const handleDescriptionChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setModifiedDescription(e.target.value);
+        setIsDescriptionDirty(true);
+    };
 
     const modifyTextWithAI = async () => {
         if (!geminiApiUrl || !globalPrompt.trim()) return setCardError('AI未配置或提示词为空');
@@ -75,8 +86,74 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
             if (!res.ok) throw new Error(`AI API错误: ${(await res.json()).error.message}`);
             const data = await res.json();
             const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (aiText) setModifiedDescription(aiText.trim()); else throw new Error("AI未返回有效文案");
+            if (aiText) {
+                setModifiedDescription(aiText.trim());
+                setIsDescriptionDirty(true);
+            } else {
+                throw new Error("AI未返回有效文案");
+            }
         } catch (e) { setCardError(getErrorMessage(e)); } finally { setIsLoadingAI(false); }
+    };
+
+    const extractKeywordsWithAI = async () => {
+        if (!geminiApiUrl) return setCardError('AI未配置');
+        setIsLoadingKeywords(true);
+        setCardError(null);
+
+        const original_text = product.result_text_content || '';
+
+        const prompt = `
+            请基于以下业务描述和产品文案，提取5-8个最相关的中文推广关键词。
+            要求：
+            1.  只返回关键词本身，用逗号（,）分隔。
+            2.  不要添加任何编号、解释或无关文字。
+
+            ---
+            业务描述:
+            ${businessDescription}
+            ---
+            产品文案:
+            ${original_text}
+            ---
+        `;
+
+        try {
+            const res = await fetch(geminiApiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json();
+                throw new Error(`AI API 错误: ${getErrorMessage(errorData.error)}`);
+            }
+
+            const data = await res.json();
+            const keywords = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+            if (!keywords) {
+                throw new Error("AI未能返回有效关键词");
+            }
+
+            // Save keywords to the database
+            const updateRes = await fetch(`${databaseUrl}?id=eq.${product.id}`, {
+                method: 'PATCH',
+                headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+                body: JSON.stringify({ "ai提取关键词": keywords })
+            });
+
+            if (!updateRes.ok) {
+                throw new Error((await updateRes.json()).message);
+            }
+
+            setAiKeywords(keywords); // Update state to show in UI
+
+        } catch (e) {
+            setCardError(getErrorMessage(e));
+        } finally {
+            setIsLoadingKeywords(false);
+        }
     };
 
     const confirmChanges = async () => {
@@ -86,6 +163,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
         try {
             const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify({ "修改后文案": modifiedDescription }) });
             if (!res.ok) throw new Error((await res.json()).message);
+            setIsDescriptionDirty(false); // Mark as not dirty after save
             alert("文案已保存");
         } catch (e) { setCardError(getErrorMessage(e)); } finally { setIsLoadingConfirm(false); }
     };
@@ -164,16 +242,43 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
                 <textarea readOnly value={product.result_text_content || ''} rows={isOriginalCollapsed ? 2 : 6} onClick={() => setIsOriginalCollapsed(!isOriginalCollapsed)} className="w-full p-1 border rounded text-xs bg-gray-100 dark:bg-gray-700 dark:border-gray-600 cursor-pointer"/>
             </div>
             <div>
-                <label className="text-sm font-bold">修改后文案</label>
+                <div className="flex justify-between items-center mb-1">
+                    <label className="text-sm font-bold">修改后文案</label>
+                    {isDescriptionDirty && <span className="text-xs text-red-500 dark:text-red-400 font-semibold animate-pulse">有未保存的修改</span>}
+                </div>
                 <textarea value={modifiedDescription} onChange={handleDescriptionChange} rows={6} className="w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600"/>
                  </div>
 
             {/* Main Actions */}
             <div className="flex flex-wrap gap-2 text-sm">
                 <button onClick={modifyTextWithAI} disabled={isLoadingAI} className="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded disabled:opacity-50">{isLoadingAI ? '生成中...' : 'AI修改'}</button>
-                <button onClick={confirmChanges} disabled={isLoadingConfirm} className="flex-1 bg-green-500 hover:bg-green-600 text-white py-1 px-2 rounded disabled:opacity-50">{isLoadingConfirm ? '保存中...' : '保存'}</button>
+                <button onClick={confirmChanges} disabled={isLoadingConfirm || !isDescriptionDirty} className="flex-1 bg-green-500 hover:bg-green-600 text-white py-1 px-2 rounded disabled:opacity-50">{isLoadingConfirm ? '保存中...' : '保存'}</button>
                 <button onClick={searchOnXianyu} className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-1 px-2 rounded">搜闲鱼</button>
+            </div>
+            
+            {/* AI Keywords Section */}
+            <div className="border-t border-gray-200 dark:border-gray-700 mt-2 pt-2">
+                <label className="text-sm font-bold">AI提取关键词</label>
+                <div className="mt-1 p-2 w-full text-xs min-h-[4rem] bg-gray-50 dark:bg-gray-700 rounded-md border dark:border-gray-600">
+                    {aiKeywords || <span className="text-gray-400">点击下方按钮生成...</span>}
                 </div>
+                <div className="flex gap-2 mt-2">
+                    <button 
+                        onClick={extractKeywordsWithAI} 
+                        disabled={isLoadingKeywords} 
+                        className="flex-1 bg-purple-500 hover:bg-purple-600 text-white py-1 px-2 rounded text-sm disabled:opacity-50"
+                    >
+                        {isLoadingKeywords ? '提取中...' : 'AI提取关键词'}
+                    </button>
+                     <button
+                        onClick={onManageAccountKeywords}
+                        className="flex-1 bg-teal-500 hover:bg-teal-600 text-white py-1 px-2 rounded text-sm"
+                    >
+                        管理账号关键词 &rarr;
+                    </button>
+                </div>
+            </div>
+
 
             {/* Deployment Section */}
             <div className="border-t border-gray-200 dark:border-gray-700 mt-2 pt-2">
