@@ -162,6 +162,7 @@ export default function AccountsPage() {
         startTime: string;
         startProductId: string;
         generatedSchedule: ScheduledProduct[] | null;
+        timeType: 'specific' | 'random';
     } }>({});
 
 
@@ -800,7 +801,7 @@ export default function AccountsPage() {
         setErrorKeywords(null);
     };
 
-    const handleScheduleChange = (accountName: string, field: 'itemsPerDay' | 'startTime' | 'startProductId', value: string | number) => {
+    const handleScheduleChange = (accountName: string, field: 'itemsPerDay' | 'startTime' | 'startProductId' | 'timeType', value: string | number) => {
         setSchedules(prev => ({
             ...prev,
             [accountName]: {
@@ -817,16 +818,30 @@ export default function AccountsPage() {
 
         if (!account || !scheduleParams) return;
 
-        const { itemsPerDay, startTime, startProductId } = scheduleParams;
+        const { itemsPerDay, startTime, startProductId, timeType } = scheduleParams;
         const toScheduleItems = account['待上架'];
 
-        if (!toScheduleItems || toScheduleItems.length === 0 || !itemsPerDay || !startTime || !startProductId) {
+        if (!toScheduleItems || toScheduleItems.length === 0 || !itemsPerDay || !startProductId) {
             alert("请填写所有排期设置项。");
+            return;
+        }
+        
+        if (timeType === 'specific' && !startTime) {
+            alert("请选择一个首个上架时间。");
             return;
         }
 
         const intervalMinutes = (24 * 60) / itemsPerDay;
-        const startDateTime = new Date(startTime);
+        
+        let startDateTime;
+        if (timeType === 'random') {
+            // Generate a random time within the next 24 hours
+            const randomOffset = Math.random() * 24 * 60 * 60 * 1000;
+            startDateTime = new Date(Date.now() + randomOffset);
+        } else {
+            startDateTime = new Date(startTime);
+        }
+
         if (isNaN(startDateTime.getTime())) {
             alert("无效的起始时间。");
             return;
@@ -1273,15 +1288,32 @@ export default function AccountsPage() {
                                                         placeholder="例如: 3"
                                                     />
                                                 </div>
-                                                <div>
+                                                <div className="col-span-2">
                                                     <label htmlFor={`startTime-${account.name}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">首个上架时间</label>
-                                                    <input
-                                                        type="datetime-local"
-                                                        id={`startTime-${account.name}`}
-                                                        value={schedules[account.name]?.startTime || ''}
-                                                        onChange={(e) => handleScheduleChange(account.name, 'startTime', e.target.value)}
-                                                        className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                                    />
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        <input
+                                                            type="datetime-local"
+                                                            id={`startTime-${account.name}`}
+                                                            value={schedules[account.name]?.startTime || ''}
+                                                            onChange={(e) => handleScheduleChange(account.name, 'startTime', e.target.value)}
+                                                            className="block w-full px-3 py-2 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                                                            disabled={schedules[account.name]?.timeType === 'random'}
+                                                        />
+                                                        <div className="flex items-center rounded-md bg-gray-200 dark:bg-gray-600 p-0.5">
+                                                            <button 
+                                                                onClick={() => handleScheduleChange(account.name, 'timeType', 'specific')}
+                                                                className={`px-2 py-1 text-xs rounded-md ${schedules[account.name]?.timeType !== 'random' ? 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+                                                            >
+                                                                指定
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => handleScheduleChange(account.name, 'timeType', 'random')}
+                                                                className={`px-2 py-1 text-xs rounded-md ${schedules[account.name]?.timeType === 'random' ? 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+                                                            >
+                                                                随机
+                                                            </button>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <label htmlFor={`startProduct-${account.name}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">首个上架商品</label>
@@ -1304,7 +1336,11 @@ export default function AccountsPage() {
                                             <div className="mt-4 flex justify-end gap-2">
                                                  <button
                                                     onClick={() => handleGenerateSchedule(account.name)}
-                                                    disabled={!schedules[account.name]?.itemsPerDay || !schedules[account.name]?.startTime || !schedules[account.name]?.startProductId}
+                                                    disabled={
+                                                        !schedules[account.name]?.itemsPerDay || 
+                                                        (schedules[account.name]?.timeType === 'specific' && !schedules[account.name]?.startTime) || 
+                                                        !schedules[account.name]?.startProductId
+                                                    }
                                                     className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                                 >
                                                     生成排期预览
