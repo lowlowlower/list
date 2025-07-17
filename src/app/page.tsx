@@ -23,16 +23,24 @@ const getErrorMessage = (error: unknown): string => {
 };
 
 // --- Type Definitions ---
+type ScheduledProduct = {
+    id: string;
+    scheduled_at: string;
+};
+
 type Account = {
   name: string;
   created_at: string;
   updated_at: string;
-  '待上架': string[] | null;
+  '待上架': (string | ScheduledProduct | number)[] | null;
   '已上架': string[] | null;
   '点赞队列': string[] | null;
   '已点赞': string[] | null;
   '关键词prompt': string | null;
   '业务描述': string | null;
+  xhs_account: string | null;
+  '闲鱼账号': string | null;
+  '手机型号': string | null;
   keywords?: string | null; // <-- Add keywords property
 };
 
@@ -69,37 +77,57 @@ type ProductSchedule = {
 // --- Helper Components ---
 const TagList: React.FC<{ 
     title: string; 
-    items: string[] | null; 
+    items: (string | number | ScheduledProduct)[] | null; 
     color: string;
     accountName: string;
     arrayKey: keyof Account;
     onDeleteItem: (accountName: string, arrayKey: keyof Account, item: string) => void;
-}> = ({ title, items, color, accountName, arrayKey, onDeleteItem }) => (
-    <div>
-        <h4 className={`font-semibold text-sm mb-1 text-${color}-600 dark:text-${color}-400`}>{title} ({items?.length || 0})</h4>
-        <div className="flex flex-wrap gap-1">
-            {(items && items.length > 0) ? (
-                items.map((item, index) => (
-                    <span key={index} className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-${color}-100 dark:bg-${color}-900/50 text-${color}-800 dark:text-${color}-300 group/tag relative`}>
-                        {item}
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation(); // Prevent card click which navigates to product list
-                                onDeleteItem(accountName, arrayKey, item);
-                            }}
-                            className="ml-1.5 -mr-0.5 opacity-0 group-hover/tag:opacity-100 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 focus:opacity-100 transition-opacity"
-                            aria-label={`Remove ${item}`}
-                        >
-                            &times;
-                        </button>
-                    </span>
-                ))
-            ) : (
-                <span className="text-xs text-gray-500 dark:text-gray-400">无</span>
-            )}
+    schedulePreview?: ScheduledProduct[] | null;
+}> = ({ title, items, color, accountName, arrayKey, onDeleteItem, schedulePreview }) => {
+    const renderItems = () => {
+        if (schedulePreview && schedulePreview.length > 0) {
+            return schedulePreview.map((item) => (
+                <span key={item.id} className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300 group/tag relative`}>
+                    {item.id} @ {new Date(item.scheduled_at).toLocaleString('zh-CN')}
+                </span>
+            ));
+        }
+
+        if (!items || items.length === 0) {
+            return <span className="text-xs text-gray-500 dark:text-gray-400">无</span>;
+        }
+
+        return items.map((item, index) => {
+            const displayItem = typeof item === 'object' && item !== null && 'id' in item ? `${(item as ScheduledProduct).id} @ ${new Date((item as ScheduledProduct).scheduled_at).toLocaleString('zh-CN')}` : item;
+            const originalProductId = typeof item === 'object' && item !== null && 'id' in item ? (item as ScheduledProduct).id : item;
+
+            return (
+                <span key={index} className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-${color}-100 dark:bg-${color}-900/50 text-${color}-800 dark:text-${color}-300 group/tag relative`}>
+                    {displayItem as string}
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation(); // Prevent card click which navigates to product list
+                            onDeleteItem(accountName, arrayKey, String(originalProductId));
+                        }}
+                        className="ml-1.5 -mr-0.5 opacity-0 group-hover/tag:opacity-100 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 focus:opacity-100 transition-opacity"
+                        aria-label={`Remove ${originalProductId}`}
+                    >
+                        &times;
+                    </button>
+                </span>
+            );
+        });
+    };
+
+    return (
+        <div>
+            <h4 className={`font-semibold text-sm mb-1 text-${color}-600 dark:text-${color}-400`}>{title} ({schedulePreview ? schedulePreview.length : items?.length || 0})</h4>
+            <div className="flex flex-wrap gap-1">
+                {renderItems()}
+            </div>
         </div>
-    </div>
-);
+    );
+};
 
 // --- Main Page Component ---
 export default function AccountsPage() {
@@ -113,6 +141,9 @@ export default function AccountsPage() {
     const [loadingAccounts, setLoadingAccounts] = useState<boolean>(true);
     const [errorAccounts, setErrorAccounts] = useState<string | null>(null);
     const [newAccountName, setNewAccountName] = useState<string>('');
+    const [newXhsAccount, setNewXhsAccount] = useState<string>('');
+    const [newXianyuAccount, setNewXianyuAccount] = useState<string>('');
+    const [newPhoneModel, setNewPhoneModel] = useState<string>('');
     const [isAddingAccount, setIsAddingAccount] = useState<boolean>(false); 
     const [deletingAccount, setDeletingAccount] = useState<string | null>(null); 
     const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState<boolean>(false);
@@ -121,8 +152,17 @@ export default function AccountsPage() {
     const [editingKeywords, setEditingKeywords] = useState<{ [key: string]: string }>({});
     const [editingKeywordPrompts, setEditingKeywordPrompts] = useState<{ [key: string]: string }>({});
     const [editingBusinessPrompts, setEditingBusinessPrompts] = useState<{ [key: string]: string }>({});
+    const [editingXhs, setEditingXhs] = useState<{ [key: string]: string }>({});
+    const [editingXianyu, setEditingXianyu] = useState<{ [key: string]: string }>({});
+    const [editingPhone, setEditingPhone] = useState<{ [key: string]: string }>({});
     const [loadingStates, setLoadingStates] = useState<{ [key: string]: { ai: boolean; saveKeywords: boolean; saveKwPrompt: boolean; saveBizPrompt: boolean; } }>({});
     const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set());
+    const [schedules, setSchedules] = useState<{ [accountName: string]: {
+        itemsPerDay: number;
+        startTime: string;
+        startProductId: string;
+        generatedSchedule: ScheduledProduct[] | null;
+    } }>({});
 
 
     // State for products of a selected account
@@ -177,7 +217,7 @@ export default function AccountsPage() {
             const [accountsPromise, keywordsPromise] = await Promise.all([
                  supabase
                     .from('accounts_duplicate')
-                    .select('name, created_at, updated_at, "待上架", "已上架", "点赞队列", "已点赞", "关键词prompt", "业务描述"')
+                    .select('name, created_at, updated_at, "待上架", "已上架", "点赞队列", "已点赞", "关键词prompt", "业务描述", "xhs_account", "闲鱼账号", "手机型号"')
                     .order('name', { ascending: true }),
                  supabase.from('important_keywords_本人').select('id, account_name, keyword') // <-- Use new 'keyword' column
             ]);
@@ -214,17 +254,26 @@ export default function AccountsPage() {
             const initialEditingKeywords: { [key: string]: string } = {};
             const initialKeywordPrompts: { [key: string]: string } = {};
             const initialBusinessPrompts: { [key: string]: string } = {};
+            const initialXhs: { [key: string]: string } = {};
+            const initialXianyu: { [key: string]: string } = {};
+            const initialPhone: { [key: string]: string } = {};
 
             mergedAccounts.forEach(acc => {
                 initialEditingKeywords[acc.name] = acc.keywords || '';
                 initialKeywordPrompts[acc.name] = acc['关键词prompt']!;
                 initialBusinessPrompts[acc.name] = acc['业务描述']!;
+                initialXhs[acc.name] = acc.xhs_account || '';
+                initialXianyu[acc.name] = acc['闲鱼账号'] || '';
+                initialPhone[acc.name] = acc['手机型号'] || '';
             });
             
             setAllAccounts(mergedAccounts as Account[]);
             setEditingKeywords(initialEditingKeywords);
             setEditingKeywordPrompts(initialKeywordPrompts);
             setEditingBusinessPrompts(initialBusinessPrompts);
+            setEditingXhs(initialXhs);
+            setEditingXianyu(initialXianyu);
+            setEditingPhone(initialPhone);
 
         } catch (err: unknown) {
             setErrorAccounts(`加载账号列表失败: ${getErrorMessage(err)}`);
@@ -344,12 +393,18 @@ export default function AccountsPage() {
                     name: trimmedName,
                     '关键词prompt': defaultKeywordPrompt,
                     '业务描述': defaultBusinessPrompt,
+                    'xhs_account': newXhsAccount.trim() || null,
+                    '闲鱼账号': newXianyuAccount.trim() || null,
+                    '手机型号': newPhoneModel.trim() || null,
                  });
             if (error) throw error;
             alert(`账号 "${trimmedName}" 添加成功！`);
             fetchAccounts(); 
             setIsAddAccountModalOpen(false); // Close modal on success
             setNewAccountName(''); // Reset input
+            setNewXhsAccount('');
+            setNewXianyuAccount('');
+            setNewPhoneModel('');
         } catch (error: unknown) {
             alert(`添加账号失败: ${getErrorMessage(error)}`);
         } finally {
@@ -484,8 +539,8 @@ export default function AccountsPage() {
         }
     };
 
-    const handleSaveAccountField = async (accountName: string, field: '关键词prompt' | '业务描述', value: string) => {
-        const stateKey = field === '关键词prompt' ? 'saveKwPrompt' : 'saveBizPrompt';
+    const handleSaveAccountField = async (accountName: string, field: '关键词prompt' | '业务描述' | 'xhs_account' | '闲鱼账号' | '手机型号', value: string) => {
+        const stateKey = field === '关键词prompt' ? 'saveKwPrompt' : 'saveBizPrompt'; // This needs to be smarter
         setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], [stateKey]: true } }));
         
         try {
@@ -508,7 +563,8 @@ export default function AccountsPage() {
             setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], [stateKey]: false } }));
         }
     };
-
+    
+ 
 
     const handleDeleteItemFromArray = async (accountName: string, arrayKey: keyof Account, itemToDelete: string) => {
         // Ensure we only process valid array keys
@@ -518,13 +574,17 @@ export default function AccountsPage() {
             return;
         }
 
-        if (!confirm(`确定要从 "${accountName}" 的 "${arrayKey}" 列表中移除 "${itemToDelete}" 吗？`)) return;
+        const confirmed = window.confirm(`确定要从 "${arrayKey}" 列表中删除 "${itemToDelete}" 吗？`);
+        if (!confirmed) return;
 
         const originalAccount = allAccounts.find(acc => acc.name === accountName);
         if (!originalAccount) return;
 
-        const originalArray = (originalAccount[arrayKey] as string[] | null) || [];
-        const newArray = originalArray.filter(item => item !== itemToDelete);
+        const originalArray = (originalAccount[arrayKey] as (string | ScheduledProduct)[] | null) || [];
+        const newArray = originalArray.filter(item => {
+            const id = typeof item === 'string' ? item : (item as ScheduledProduct)?.id;
+            return String(id) !== itemToDelete;
+        });
 
         // Optimistic UI update
         setAllAccounts(prevAccounts => 
@@ -663,7 +723,10 @@ export default function AccountsPage() {
         try {
             // Add product to the "待上架" list of the selected account
             const currentPending = selectedAccountForProducts['待上架'] || [];
-            if (currentPending.includes(productId)) {
+            if (currentPending.some(item => {
+                const id = typeof item === 'object' && item !== null ? (item as ScheduledProduct).id : item;
+                return String(id) === String(productId);
+            })) {
                 alert('该产品已在待上架列表中。');
                 return;
             }
@@ -735,6 +798,96 @@ export default function AccountsPage() {
         setSelectedAccountForKeywords(null);
         setKeywordsForEditing([]);
         setErrorKeywords(null);
+    };
+
+    const handleScheduleChange = (accountName: string, field: 'itemsPerDay' | 'startTime' | 'startProductId', value: string | number) => {
+        setSchedules(prev => ({
+            ...prev,
+            [accountName]: {
+                ...prev[accountName],
+                [field]: value,
+                generatedSchedule: null, // Reset preview when params change
+            }
+        }));
+    };
+
+    const handleGenerateSchedule = (accountName: string) => {
+        const account = allAccounts.find(a => a.name === accountName);
+        const scheduleParams = schedules[accountName];
+
+        if (!account || !scheduleParams) return;
+
+        const { itemsPerDay, startTime, startProductId } = scheduleParams;
+        const toScheduleItems = account['待上架'];
+
+        if (!toScheduleItems || toScheduleItems.length === 0 || !itemsPerDay || !startTime || !startProductId) {
+            alert("请填写所有排期设置项。");
+            return;
+        }
+
+        const intervalMinutes = (24 * 60) / itemsPerDay;
+        const startDateTime = new Date(startTime);
+        if (isNaN(startDateTime.getTime())) {
+            alert("无效的起始时间。");
+            return;
+        }
+
+        const productIds = toScheduleItems.map(item => {
+            const id = typeof item === 'object' && item !== null ? (item as ScheduledProduct).id : item;
+            return String(id); // Ensure all IDs are strings for consistent comparison
+        });
+        const startIndex = productIds.indexOf(String(startProductId)); // Also ensure startProductId is a string
+        if (startIndex === -1) {
+            console.error("Debug Info:", {
+                startProductId,
+                productIds,
+            });
+            alert("起始商品不在待上架列表中。");
+            return;
+        }
+
+        // Re-order product IDs starting from the selected one
+        const orderedProductIds = [...productIds.slice(startIndex), ...productIds.slice(0, startIndex)];
+
+        const generatedSchedule: ScheduledProduct[] = orderedProductIds.map((productId, index) => {
+            const scheduledDate = new Date(startDateTime.getTime() + index * intervalMinutes * 60 * 1000);
+            return {
+                id: productId,
+                scheduled_at: scheduledDate.toISOString(),
+            };
+        });
+        
+        setSchedules(prev => ({
+            ...prev,
+            [accountName]: {
+                ...prev[accountName],
+                generatedSchedule,
+            }
+        }));
+    };
+
+    const handleSaveSchedule = async (accountName: string) => {
+        const scheduleData = schedules[accountName]?.generatedSchedule;
+        if (!scheduleData) {
+            alert("没有可保存的排期。请先生成排期预览。");
+            return;
+        }
+
+        try {
+            const { error } = await supabase
+                .from('accounts_duplicate')
+                .update({ '待上架': scheduleData })
+                .eq('name', accountName);
+
+            if (error) throw error;
+            
+            alert('排期保存成功！');
+            // Refresh accounts data to show persisted state
+            fetchAccounts();
+
+        } catch (err: unknown) {
+            alert(`保存排期失败: ${getErrorMessage(err)}`);
+        }
     };
 
 
@@ -875,7 +1028,10 @@ export default function AccountsPage() {
                             const deployedTo = productSchedules
                                 .filter(s => s.product_id === product.id)
                                 .map(s => s.account_name);
-                            const isPending = selectedAccountForProducts?.['待上架']?.includes(product.id) ?? false;
+                            const isPending = selectedAccountForProducts?.['待上架']?.some(item => {
+                                const id = typeof item === 'object' && item !== null ? (item as ScheduledProduct).id : item;
+                                return String(id) === String(product.id);
+                            }) ?? false;
                             return (
                                 <ProductCard 
                                     key={product.id} 
@@ -936,8 +1092,21 @@ export default function AccountsPage() {
                                 {deletingAccount === account.name ? "..." : "✕"}
                 </button>
                             <h3 className="font-bold text-lg border-b pb-2 pr-8">{account.name}</h3>
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                                <TagList title="待上架" items={account['待上架']} color="orange" accountName={account.name} arrayKey="待上架" onDeleteItem={handleDeleteItemFromArray} />
+                             <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400">
+                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">小红书:</strong> {account.xhs_account || 'N/A'}</p>
+                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
+                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-3 mt-2 border-t pt-3">
+                                <TagList 
+                                    title="待上架" 
+                                    items={account['待上架']} 
+                                    color="yellow" 
+                                    accountName={account.name}
+                                    arrayKey='待上架'
+                                    onDeleteItem={handleDeleteItemFromArray}
+                                    schedulePreview={schedules[account.name]?.generatedSchedule}
+                                />
                                 <TagList title="已上架" items={account['已上架']} color="green" accountName={account.name} arrayKey="已上架" onDeleteItem={handleDeleteItemFromArray} />
                                 <TagList title="点赞队列" items={account['点赞队列']} color="blue" accountName={account.name} arrayKey="点赞队列" onDeleteItem={handleDeleteItemFromArray} />
                                 <TagList title="已点赞" items={account['已点赞']} color="purple" accountName={account.name} arrayKey="已点赞" onDeleteItem={handleDeleteItemFromArray} />
@@ -957,80 +1126,200 @@ export default function AccountsPage() {
                             </div>
                             
                             {expandedAccounts.has(account.name) && (
-                                <>
-                                    {/* Keywords Section */}
-                                    <div className="border-t border-gray-200 dark:border-gray-600 mt-3 pt-3">
-                                        <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">推广关键词</label>
-                                        <textarea
-                                            value={editingKeywords[account.name] || ''}
-                                            onChange={(e) => setEditingKeywords(prev => ({...prev, [account.name]: e.target.value}))}
-                                            onClick={(e) => e.stopPropagation()}
-                                            placeholder="点击AI生成或手动输入关键词..."
-                                            rows={3}
-                                            className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
-                                        />
-                                        <div className="flex gap-2 mt-2">
-                                            <button 
-                                                onClick={(e) => {e.stopPropagation(); handleGenerateKeywords(account.name)}}
-                                                disabled={loadingStates[account.name]?.ai}
-                                                className="flex-1 bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                <div 
+                                    className="mt-4 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg"
+                                >
+                                    <h5 className="font-semibold text-md mb-3" onClick={(e) => e.stopPropagation()}>高级设置</h5>
+                                     <div className="space-y-4" onClick={(e) => e.stopPropagation()}>
+                                        <div>
+                                            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">推广关键词</label>
+                                            <textarea
+                                                value={editingKeywords[account.name] || ''}
+                                                onChange={(e) => setEditingKeywords(prev => ({...prev, [account.name]: e.target.value}))}
+                                                onClick={(e) => e.stopPropagation()}
+                                                placeholder="点击AI生成或手动输入关键词..."
+                                                rows={3}
+                                                className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
+                                            />
+                                            <div className="flex gap-2 mt-2">
+                                                <button 
+                                                    onClick={(e) => {e.stopPropagation(); handleGenerateKeywords(account.name)}}
+                                                    disabled={loadingStates[account.name]?.ai}
+                                                    className="flex-1 bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                                >
+                                                    {loadingStates[account.name]?.ai ? '生成中...' : 'AI生成'}
+                                                </button>
+                                                <button 
+                                                    onClick={(e) => {e.stopPropagation(); handleSaveKeywords(account.name)}}
+                                                    disabled={loadingStates[account.name]?.saveKeywords || editingKeywords[account.name] === (account.keywords || '')}
+                                                    className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                                >
+                                                    {loadingStates[account.name]?.saveKeywords ? '保存中...' : '保存'}
+                                                </button>
+                                            </div>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleAccountSelectForKeywords(account); }}
+                                                className="w-full mt-2 bg-purple-500 hover:bg-purple-600 text-white text-xs py-1 px-2 rounded"
                                             >
-                                                {loadingStates[account.name]?.ai ? '生成中...' : 'AI生成'}
-                                            </button>
-                                            <button 
-                                                onClick={(e) => {e.stopPropagation(); handleSaveKeywords(account.name)}}
-                                                disabled={loadingStates[account.name]?.saveKeywords || editingKeywords[account.name] === (account.keywords || '')}
-                                                className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
-                                            >
-                                                {loadingStates[account.name]?.saveKeywords ? '保存中...' : '保存'}
+                                                管理关键词 &rarr;
                                             </button>
                                         </div>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); handleAccountSelectForKeywords(account); }}
-                                            className="w-full mt-2 bg-purple-500 hover:bg-purple-600 text-white text-xs py-1 px-2 rounded"
-                                        >
-                                            管理关键词 &rarr;
-                                        </button>
+                                        
+                                        {/* Prompts Section */}
+                                        <div className="border-t border-gray-200 dark:border-gray-600 mt-3 pt-3 space-y-3">
+                                            <div>
+                                                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">业务描述</label>
+                                                <textarea
+                                                    value={editingBusinessPrompts[account.name] || ''}
+                                                    onChange={(e) => setEditingBusinessPrompts(prev => ({...prev, [account.name]: e.target.value}))}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    rows={3}
+                                                    className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
+                                                />
+                                                <button
+                                                     onClick={(e) => {e.stopPropagation(); handleSaveAccountField(account.name, '业务描述', editingBusinessPrompts[account.name])}}
+                                                    disabled={loadingStates[account.name]?.saveBizPrompt || editingBusinessPrompts[account.name] === (account['业务描述'] || '')}
+                                                    className="w-full mt-1 bg-teal-500 hover:bg-teal-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                                >
+                                                    {loadingStates[account.name]?.saveBizPrompt ? '保存中...' : '保存业务描述'}
+                                                </button>
+                                           </div>
+                                           <div>
+                                                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">关键词生成提示词</label>
+                                                <textarea
+                                                    value={editingKeywordPrompts[account.name] || ''}
+                                                    onChange={(e) => setEditingKeywordPrompts(prev => ({...prev, [account.name]: e.target.value}))}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    rows={3}
+                                                    className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
+                                                />
+                                                <button
+                                                    onClick={(e) => {e.stopPropagation(); handleSaveAccountField(account.name, '关键词prompt', editingKeywordPrompts[account.name])}}
+                                                    disabled={loadingStates[account.name]?.saveKwPrompt || editingKeywordPrompts[account.name] === (account['关键词prompt'] || '')}
+                                                    className="w-full mt-1 bg-teal-500 hover:bg-teal-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                                >
+                                                    {loadingStates[account.name]?.saveKwPrompt ? '保存中...' : '保存生成提示词'}
+                                                </button>
+                                           </div>
+                                        </div>
+
+                                        {/* Core Assets Section */}
+                                        <div className="border-t border-gray-200 dark:border-gray-600 mt-3 pt-3 space-y-3">
+                                            <div>
+                                                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">小红书账号</label>
+                                                <input
+                                                    type="text"
+                                                    value={editingXhs[account.name] || ''}
+                                                    onChange={(e) => setEditingXhs(prev => ({...prev, [account.name]: e.target.value}))}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
+                                                />
+                                                <button
+                                                    onClick={(e) => {e.stopPropagation(); handleSaveAccountField(account.name, 'xhs_account', editingXhs[account.name])}}
+                                                    disabled={editingXhs[account.name] === (account.xhs_account || '')}
+                                                    className="w-full mt-1 bg-teal-500 hover:bg-teal-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                                >
+                                                    保存
+                                                </button>
+                                           </div>
+                                           <div>
+                                                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">闲鱼账号</label>
+                                                <input
+                                                    type="text"
+                                                    value={editingXianyu[account.name] || ''}
+                                                    onChange={(e) => setEditingXianyu(prev => ({...prev, [account.name]: e.target.value}))}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
+                                                />
+                                                <button
+                                                    onClick={(e) => {e.stopPropagation(); handleSaveAccountField(account.name, '闲鱼账号', editingXianyu[account.name])}}
+                                                    disabled={editingXianyu[account.name] === (account['闲鱼账号'] || '')}
+                                                    className="w-full mt-1 bg-teal-500 hover:bg-teal-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                                >
+                                                    保存
+                                                </button>
+                                           </div>
+                                           <div>
+                                                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">手机型号</label>
+                                                <input
+                                                    type="text"
+                                                    value={editingPhone[account.name] || ''}
+                                                    onChange={(e) => setEditingPhone(prev => ({...prev, [account.name]: e.target.value}))}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
+                                                />
+                                                <button
+                                                    onClick={(e) => {e.stopPropagation(); handleSaveAccountField(account.name, '手机型号', editingPhone[account.name])}}
+                                                    disabled={editingPhone[account.name] === (account['手机型号'] || '')}
+                                                    className="w-full mt-1 bg-teal-500 hover:bg-teal-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
+                                                >
+                                                    保存
+                                                </button>
+                                           </div>
+                                        </div>
+
+                                        {/* Scheduling Section */}
+                                        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700" onClick={(e) => e.stopPropagation()}>
+                                            <h5 className="font-semibold text-md mb-3">上架排期设置</h5>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                                                <div>
+                                                    <label htmlFor={`itemsPerDay-${account.name}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">每日上架数量</label>
+                                                    <input
+                                                        type="number"
+                                                        id={`itemsPerDay-${account.name}`}
+                                                        value={schedules[account.name]?.itemsPerDay || ''}
+                                                        onChange={(e) => handleScheduleChange(account.name, 'itemsPerDay', e.target.value ? parseInt(e.target.value, 10) : '')}
+                                                        className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                                        placeholder="例如: 3"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label htmlFor={`startTime-${account.name}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">首个上架时间</label>
+                                                    <input
+                                                        type="datetime-local"
+                                                        id={`startTime-${account.name}`}
+                                                        value={schedules[account.name]?.startTime || ''}
+                                                        onChange={(e) => handleScheduleChange(account.name, 'startTime', e.target.value)}
+                                                        className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label htmlFor={`startProduct-${account.name}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">首个上架商品</label>
+                                                    <select
+                                                        id={`startProduct-${account.name}`}
+                                                        value={schedules[account.name]?.startProductId || ''}
+                                                        onChange={(e) => handleScheduleChange(account.name, 'startProductId', e.target.value)}
+                                                        className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                                        disabled={!account['待上架'] || account['待上架'].length === 0}
+                                                    >
+                                                        <option value="">选择商品</option>
+                                                        {(account['待上架'] || []).map((item, index) => {
+                                                            const productId = typeof item === 'object' && item !== null ? (item as ScheduledProduct).id : item;
+                                                            if (!productId) return null;
+                                                            return <option key={`${productId}-${index}`} value={productId}>{String(productId)}</option>;
+                                                        })}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 flex justify-end gap-2">
+                                                 <button
+                                                    onClick={() => handleGenerateSchedule(account.name)}
+                                                    disabled={!schedules[account.name]?.itemsPerDay || !schedules[account.name]?.startTime || !schedules[account.name]?.startProductId}
+                                                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                    生成排期预览
+                                                </button>
+                                                <button
+                                                    onClick={() => handleSaveSchedule(account.name)}
+                                                    disabled={!schedules[account.name]?.generatedSchedule}
+                                                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                    保存排期
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
-                                    
-                                    {/* Prompts Section */}
-                                    <div className="border-t border-gray-200 dark:border-gray-600 mt-3 pt-3 space-y-3">
-                                       <div>
-                                            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">关键词生成提示词</label>
-                                            <textarea
-                                                value={editingKeywordPrompts[account.name] || ''}
-                                                onChange={(e) => setEditingKeywordPrompts(prev => ({...prev, [account.name]: e.target.value}))}
-                                                onClick={(e) => e.stopPropagation()}
-                                                rows={3}
-                                                className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
-                                            />
-                                            <button
-                                                onClick={(e) => {e.stopPropagation(); handleSaveAccountField(account.name, '关键词prompt', editingKeywordPrompts[account.name])}}
-                                                disabled={loadingStates[account.name]?.saveKwPrompt || editingKeywordPrompts[account.name] === (account['关键词prompt'] || '')}
-                                                className="w-full mt-1 bg-teal-500 hover:bg-teal-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
-                                            >
-                                                {loadingStates[account.name]?.saveKwPrompt ? '保存中...' : '保存生成提示词'}
-                                            </button>
-                                       </div>
-                                       <div>
-                                            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">业务描述</label>
-                                            <textarea
-                                                value={editingBusinessPrompts[account.name] || ''}
-                                                onChange={(e) => setEditingBusinessPrompts(prev => ({...prev, [account.name]: e.target.value}))}
-                                                onClick={(e) => e.stopPropagation()}
-                                                rows={3}
-                                                className="w-full p-1.5 border rounded-md text-xs bg-gray-50 dark:bg-gray-700 dark:border-gray-500"
-                                            />
-                                            <button
-                                                 onClick={(e) => {e.stopPropagation(); handleSaveAccountField(account.name, '业务描述', editingBusinessPrompts[account.name])}}
-                                                disabled={loadingStates[account.name]?.saveBizPrompt || editingBusinessPrompts[account.name] === (account['业务描述'] || '')}
-                                                className="w-full mt-1 bg-teal-500 hover:bg-teal-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50"
-                                            >
-                                                {loadingStates[account.name]?.saveBizPrompt ? '保存中...' : '保存筛选提示词'}
-                                            </button>
-                                       </div>
-                                    </div>
-                                </>
+                                </div>
                             )}
 
 
@@ -1049,18 +1338,44 @@ export default function AccountsPage() {
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
                     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md">
                         <h2 className="text-xl font-bold mb-4">添加新账号</h2>
-                        <input 
-                            type="text" 
-                            placeholder="输入新账号名称" 
-                            value={newAccountName} 
-                            onChange={(e) => setNewAccountName(e.target.value)} 
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-500 rounded-md text-sm mb-4"
-                        />
-                        <div className="flex justify-end gap-3">
+                        <div className="space-y-3">
+                            <input 
+                                type="text" 
+                                placeholder="输入新账号名称 (必填)" 
+                                value={newAccountName} 
+                                onChange={(e) => setNewAccountName(e.target.value)} 
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-500 rounded-md text-sm"
+                            />
+                             <input 
+                                type="text" 
+                                placeholder="小红书账号 (选填)" 
+                                value={newXhsAccount} 
+                                onChange={(e) => setNewXhsAccount(e.target.value)} 
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-500 rounded-md text-sm"
+                            />
+                             <input 
+                                type="text" 
+                                placeholder="闲鱼账号 (选填)" 
+                                value={newXianyuAccount} 
+                                onChange={(e) => setNewXianyuAccount(e.target.value)} 
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-500 rounded-md text-sm"
+                            />
+                             <input 
+                                type="text" 
+                                placeholder="手机型号 (选填)" 
+                                value={newPhoneModel} 
+                                onChange={(e) => setNewPhoneModel(e.target.value)} 
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-500 rounded-md text-sm"
+                            />
+                        </div>
+                        <div className="flex justify-end gap-3 mt-5">
                 <button
                                 onClick={() => {
                                     setIsAddAccountModalOpen(false);
                                     setNewAccountName('');
+                                    setNewXhsAccount('');
+                                    setNewXianyuAccount('');
+                                    setNewPhoneModel('');
                                 }}
                                 className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded"
                             >

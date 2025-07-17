@@ -50,6 +50,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
     const [isDescriptionDirty, setIsDescriptionDirty] = useState(false);
     const [aiKeywords, setAiKeywords] = useState(product['ai提取关键词'] || '');
     const [isLoadingKeywords, setIsLoadingKeywords] = useState(false);
+    const [isAiToolsExpanded, setIsAiToolsExpanded] = useState(false); // For accordion
     const [newImageUrl, setNewImageUrl] = useState('');
     const [isOriginalCollapsed, setIsOriginalCollapsed] = useState(true);
     const [isLoadingAI, setIsLoadingAI] = useState(false);
@@ -68,6 +69,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
         setCardError(null);
         setDeployError(null);
             setIsDeploying(false);
+        setIsAiToolsExpanded(false); // Reset on product change
     }, [product]);
 
     // --- Handlers ---
@@ -215,8 +217,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
             {/* Image & Search */}
             {imageUrl && (
                 <div className="relative w-full h-48">
-                    <Image
-                        src={imageUrl}
+                        <Image
+                            src={imageUrl}
                         alt="商品图片"
                         fill
                         sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
@@ -254,46 +256,63 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDeploy, 
                 <button onClick={modifyTextWithAI} disabled={isLoadingAI} className="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-1 px-2 rounded disabled:opacity-50">{isLoadingAI ? '生成中...' : 'AI修改'}</button>
                 <button onClick={confirmChanges} disabled={isLoadingConfirm || !isDescriptionDirty} className="flex-1 bg-green-500 hover:bg-green-600 text-white py-1 px-2 rounded disabled:opacity-50">{isLoadingConfirm ? '保存中...' : '保存'}</button>
                 <button onClick={searchOnXianyu} className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-1 px-2 rounded">搜闲鱼</button>
-            </div>
-            
-            {/* AI Keywords Section */}
-            <div className="border-t border-gray-200 dark:border-gray-700 mt-2 pt-2">
-                <label className="text-sm font-bold">AI提取关键词</label>
-                <div className="mt-1 p-2 w-full text-xs min-h-[4rem] bg-gray-50 dark:bg-gray-700 rounded-md border dark:border-gray-600">
-                    {aiKeywords || <span className="text-gray-400">点击下方按钮生成...</span>}
                 </div>
-                <div className="flex gap-2 mt-2">
-                    <button 
-                        onClick={extractKeywordsWithAI} 
-                        disabled={isLoadingKeywords} 
-                        className="flex-1 bg-purple-500 hover:bg-purple-600 text-white py-1 px-2 rounded text-sm disabled:opacity-50"
-                    >
-                        {isLoadingKeywords ? '提取中...' : 'AI提取关键词'}
-                    </button>
-                     <button
-                        onClick={onManageAccountKeywords}
-                        className="flex-1 bg-teal-500 hover:bg-teal-600 text-white py-1 px-2 rounded text-sm"
-                    >
-                        管理账号关键词 &rarr;
-                    </button>
-                </div>
-            </div>
 
-
-            {/* Deployment Section */}
-            <div className="border-t border-gray-200 dark:border-gray-700 mt-2 pt-2">
+            {/* Deployment Section - MORE PROMINENT */}
+            <div className="border-2 border-indigo-300 dark:border-indigo-600 mt-3 pt-3 p-3 rounded-lg bg-indigo-50 dark:bg-gray-800/50">
                 <div className="flex justify-between items-center">
-                    <span className="text-sm font-bold">投放状态</span>
-                    <button onClick={handleDeployClick} disabled={isDeploying || isPending} className="bg-indigo-500 hover:bg-indigo-600 text-white text-xs py-1 px-2 rounded disabled:opacity-50 disabled:cursor-not-allowed">
-                        {isDeploying ? '投放中...' : (isPending ? '待上架' : '投放')}
+                    <span className="text-base font-bold text-indigo-800 dark:text-indigo-200">投放状态</span>
+                        <button
+                        onClick={handleDeployClick} 
+                        disabled={isDeploying || isPending} 
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold py-2 px-4 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105 transition-transform"
+                        >
+                        {isDeploying ? '投放中...' : (isPending ? '待上架' : '投放到此账号')}
                         </button>
                 </div>
                 <div className="flex flex-wrap gap-1 mt-2">
                     {deployedTo.length > 0 ? deployedTo.map(name => (
                         <span key={name} className="px-1.5 py-0.5 text-xs rounded bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200">{name} (已上架)</span>
-                    )) : <span className="text-xs text-gray-500">未投放到任何账号</span>}
+                    )) : <span className="text-sm text-gray-500">未投放到任何账号</span>}
                 </div>
                  {deployError && <p className="text-red-500 text-xs mt-1">{deployError}</p>}
+                </div>
+
+            {/* AI Tools Accordion */}
+            <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
+                 <button
+                    onClick={() => setIsAiToolsExpanded(!isAiToolsExpanded)}
+                    className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center py-1"
+                 >
+                    <span>🤖 AI 工具</span>
+                    <span className={`transform transition-transform ${isAiToolsExpanded ? 'rotate-180' : 'rotate-0'}`}>▼</span>
+                 </button>
+                {isAiToolsExpanded && (
+                    <div className="mt-2 space-y-3">
+                         {/* AI Keywords Section */}
+                        <div>
+                            <label className="text-sm font-bold">AI提取关键词</label>
+                            <div className="mt-1 p-2 w-full text-xs min-h-[4rem] bg-gray-50 dark:bg-gray-700 rounded-md border dark:border-gray-600">
+                                {aiKeywords || <span className="text-gray-400">点击下方按钮生成...</span>}
+                            </div>
+                            <div className="flex gap-2 mt-2">
+                 <button
+                                    onClick={extractKeywordsWithAI} 
+                                    disabled={isLoadingKeywords} 
+                                    className="flex-1 bg-purple-500 hover:bg-purple-600 text-white py-1 px-2 rounded text-sm disabled:opacity-50"
+                 >
+                                    {isLoadingKeywords ? '提取中...' : 'AI提取关键词'}
+                 </button>
+                    <button
+                                    onClick={onManageAccountKeywords}
+                                    className="flex-1 bg-teal-500 hover:bg-teal-600 text-white py-1 px-2 rounded text-sm"
+                                >
+                                    管理账号关键词 &rarr;
+                    </button>
+                            </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
             {cardError && <p className="text-red-500 text-xs mt-2">{cardError}</p>}
