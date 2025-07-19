@@ -87,7 +87,11 @@ const TagList: React.FC<{
     schedulePreview?: ScheduledProduct[] | null;
     layout?: 'horizontal' | 'vertical';
     deployedIds?: (string | number)[] | null;
-}> = ({ title, items, color, accountName, arrayKey, onDeleteItem, schedulePreview, layout = 'horizontal', deployedIds = [] }) => {
+    // Props for editing schedule time
+    editingSchedule?: { accountName: string; id: string; newTime: string } | null;
+    setEditingSchedule?: (editState: { accountName: string; id: string; newTime: string } | null) => void;
+    onUpdateTime?: (accountName: string, itemId: string, newTime: string) => void;
+}> = ({ title, items, color, accountName, arrayKey, onDeleteItem, schedulePreview, layout = 'horizontal', deployedIds = [], editingSchedule, setEditingSchedule, onUpdateTime }) => {
     const renderItems = () => {
         let displayItems = items;
         if (schedulePreview && schedulePreview.length > 0) {
@@ -97,6 +101,13 @@ const TagList: React.FC<{
         if (!displayItems || displayItems.length === 0) {
             return <span className="text-xs text-gray-500 dark:text-gray-400">无</span>;
         }
+
+        // Helper to format date for datetime-local input
+        const formatForInput = (isoDate: string) => {
+            const d = new Date(isoDate);
+            const pad = (num: number) => String(num).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        };
 
         return displayItems.map((item, index) => {
             // Handle placeholders
@@ -113,8 +124,18 @@ const TagList: React.FC<{
             // Handle simple string/number items (for '已上架' list, etc.)
             if (typeof item !== 'object') {
                  return (
-                    <span key={index} className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-${color}-100 dark:bg-${color}-900/50 text-${color}-800 dark:text-${color}-300`}>
+                    <span key={index} className={`inline-flex items-center px-2 py-1 rounded text-sm font-mono bg-${color}-100 dark:bg-${color}-900/50 text-${color}-800 dark:text-${color}-300 group/tag`}>
                         {item}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteItem(accountName, arrayKey, String(item));
+                            }}
+                            className="ml-1.5 p-1 text-2xl leading-none opacity-0 group-hover/tag:opacity-100 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200 focus:opacity-100 transition-opacity"
+                            aria-label={`Remove ${item}`}
+                        >
+                            &times;
+                        </button>
                     </span>
                 );
             }
@@ -124,24 +145,62 @@ const TagList: React.FC<{
             const displayTime = new Date(scheduledItem.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
             
             const itemColor = isDeployed ? 'green' : color;
+            const isEditing = editingSchedule?.id === scheduledItem.id && editingSchedule?.accountName === accountName;
+
+            if (isEditing) {
+                 return (
+                    <div key={index} className="w-full flex items-center gap-2 p-1.5 bg-blue-200 dark:bg-blue-900/70 rounded-md">
+                        <strong className="font-mono text-xs">ID: {scheduledItem.id}</strong>
+                        <input
+                            type="datetime-local"
+                            value={formatForInput(editingSchedule!.newTime)}
+                            onChange={(e) => {
+                                e.stopPropagation();
+                                setEditingSchedule!({ ...editingSchedule!, newTime: e.target.value })
+                            }}
+                            className="flex-grow p-1 border rounded-md text-xs font-mono bg-white dark:bg-gray-700 dark:border-gray-600"
+                            autoFocus
+                            onClick={e => e.stopPropagation()}
+                        />
+                        <button onClick={(e) => { e.stopPropagation(); onUpdateTime!(accountName, scheduledItem.id, editingSchedule!.newTime); }} className="text-sm font-bold text-green-600 hover:text-green-700">保存</button>
+                        <button onClick={(e) => { e.stopPropagation(); setEditingSchedule!(null); }} className="text-sm text-gray-600 hover:text-gray-800">取消</button>
+                    </div>
+                );
+            }
 
             return (
                 <div key={index} className={`w-full flex justify-between items-center px-2 py-1.5 rounded-md text-xs font-mono bg-${itemColor}-100 dark:bg-${itemColor}-900/50 text-${itemColor}-800 dark:text-${itemColor}-300 group/tag`}>
                     <span><strong>ID: {scheduledItem.id}</strong> @ {displayTime}</span>
-                    {isDeployed ? (
-                        <span className="font-sans font-bold text-xs">✅ 已上架</span>
-                    ) : (
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteItem(accountName, arrayKey, String(scheduledItem.id));
-                            }}
-                            className="opacity-0 group-hover/tag:opacity-100 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 focus:opacity-100 transition-opacity"
-                            aria-label={`Remove ${scheduledItem.id}`}
-                        >
-                            &times;
-                        </button>
-                    )}
+                    <div className="flex items-center gap-1.5 opacity-0 group-hover/tag:opacity-100 transition-opacity">
+                        {isDeployed ? (
+                            <span className="font-sans font-bold text-xs pr-2">✅ 已上架</span>
+                        ) : (
+                            <>
+                                {onUpdateTime && setEditingSchedule && (
+                                     <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setEditingSchedule({ accountName, id: scheduledItem.id, newTime: scheduledItem.scheduled_at });
+                                        }}
+                                        className="p-1 text-lg leading-none rounded-full text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200"
+                                        aria-label={`Edit time for ${scheduledItem.id}`}
+                                    >
+                                        ✏️
+                                    </button>
+                                )}
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onDeleteItem(accountName, arrayKey, String(scheduledItem.id));
+                                    }}
+                                    className="p-1.5 text-2xl leading-none rounded-full text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
+                                    aria-label={`Remove ${scheduledItem.id}`}
+                                >
+                                    &times;
+                                </button>
+                            </>
+                        )}
+                    </div>
                 </div>
             );
         });
@@ -183,6 +242,7 @@ export default function AccountsPage() {
     const [deletingAccount, setDeletingAccount] = useState<string | null>(null); 
     const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState<boolean>(false);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null); // State for the account settings modal
+    const [editingSchedule, setEditingSchedule] = useState<{ accountName: string; id: string; newTime: string } | null>(null);
     
     // State for Keywords and Prompts
     const [editingKeywords, setEditingKeywords] = useState<{ [key: string]: string }>({});
@@ -301,48 +361,66 @@ export default function AccountsPage() {
                 const rule = (acc as Account).scheduling_rule;
 
                 if (rule && rule.items_per_day > 0) {
-                    const finalSchedule: ScheduledProduct[] = [];
+                    const now = new Date();
 
-                    // 1. Determine the start time (within the next hour)
-                    const now = Date.now();
-                    const firstPostOffset = Math.random() * 60 * 60 * 1000;
-                    const firstPostTime = now + firstPostOffset;
+                    // 1. Get existing future-scheduled items and unscheduled IDs
+                    const futureScheduledItems = (cleanPendingProducts.filter(item =>
+                        typeof item === 'object' && item !== null && item.scheduled_at && new Date(item.scheduled_at) > now
+                    ) as ScheduledProduct[]).sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
 
-                    // 2. Calculate interval
+                    const unscheduledIds = cleanPendingProducts
+                        .filter(item => typeof item === 'string')
+                        .sort() as string[]; // Sort for deterministic order
+
+                    const finalSchedule: ScheduledProduct[] = [...futureScheduledItems];
+                    const unscheduledIdsQueue = [...unscheduledIds]; // Create a mutable queue
+
+                    // 2. Determine the starting time for filling empty slots
                     const intervalMillis = (24 * 60 / rule.items_per_day) * 60 * 1000;
+                    let nextScheduleTime: number;
 
-                    // 3. Get product IDs to schedule and shuffle them
-                    const productIdsToSchedule = cleanPendingProducts.map(item => {
-                        const id = typeof item === 'object' && item !== null ? (item as ScheduledProduct).id : item;
-                        return String(id);
-                    }).sort(() => Math.random() - 0.5); 
+                    const lastScheduledItem = finalSchedule.length > 0 ? finalSchedule[finalSchedule.length - 1] : null;
 
-                    const countToSchedule = Math.min(productIdsToSchedule.length, rule.items_per_day);
-
-                    // 4. Create schedule for real products
-                    for (let i = 0; i < countToSchedule; i++) {
-                        const scheduledTimestamp = firstPostTime + i * intervalMillis;
-                        finalSchedule.push({
-                            id: productIdsToSchedule[i],
-                            scheduled_at: new Date(scheduledTimestamp).toISOString(),
-                            isPlaceholder: false,
-                        });
-                    }
-
-                    // 5. Add placeholders for the remaining slots
-                    const placeholdersNeeded = rule.items_per_day - countToSchedule;
-                    if (placeholdersNeeded > 0) {
-                        for (let i = 0; i < placeholdersNeeded; i++) {
-                            const placeholderTimestamp = firstPostTime + (countToSchedule + i) * intervalMillis;
-                            finalSchedule.push({
-                                id: `待投放商品 ${countToSchedule + i + 1}`,
-                                scheduled_at: new Date(placeholderTimestamp).toISOString(),
-                                isPlaceholder: true,
-                            });
-                        }
+                    if (lastScheduledItem) {
+                        // Schedule relative to the last existing item
+                        nextScheduleTime = new Date(lastScheduledItem.scheduled_at).getTime() + intervalMillis;
+                    } else {
+                        // First item, schedule it predictably
+                        nextScheduleTime = now.getTime() + 10 * 60 * 1000; // 10 mins from now
                     }
                     
-                    // 6. Sort by time (already sorted, but good practice)
+                    // Ensure the first new item is not in the past
+                    if (nextScheduleTime < now.getTime()) {
+                        nextScheduleTime = now.getTime() + 10 * 60 * 1000;
+                    }
+                    
+                    // 3. Fill the schedule up to the desired number of items
+                    const placeholderBaseIndex = finalSchedule.filter(item => item.isPlaceholder).length;
+                    let placeholderCounter = 1;
+                    
+                    while (finalSchedule.length < rule.items_per_day) {
+                        const nextProductId = unscheduledIdsQueue.shift();
+
+                        if (nextProductId) {
+                            // Add a real product
+                            finalSchedule.push({
+                                id: nextProductId,
+                                scheduled_at: new Date(nextScheduleTime).toISOString(),
+                                isPlaceholder: false,
+                            });
+                        } else {
+                            // Add a placeholder
+                            finalSchedule.push({
+                                id: `待定商品 ${placeholderBaseIndex + placeholderCounter}`,
+                                scheduled_at: new Date(nextScheduleTime).toISOString(),
+                                isPlaceholder: true,
+                            });
+                            placeholderCounter++;
+                        }
+                        nextScheduleTime += intervalMillis;
+                    }
+                    
+                    // 4. Sort and assign
                     finalSchedule.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
                     todays_schedule = finalSchedule;
                 }
@@ -692,14 +770,7 @@ export default function AccountsPage() {
             return String(id) !== itemToDelete;
         });
 
-        // Optimistic UI update
-        setAllAccounts(prevAccounts => 
-            prevAccounts.map(acc => 
-                acc.name === accountName ? { ...acc, [arrayKey]: newArray } : acc
-            )
-        );
-
-        // Update Supabase
+        // Wait for supabase operation before updating UI to ensure consistency
         try {
             const { error } = await supabase
                 .from('accounts_duplicate')
@@ -707,22 +778,14 @@ export default function AccountsPage() {
                 .eq('name', accountName);
 
             if (error) {
-                alert(`删除失败: ${error.message}`);
-                // Revert UI on failure by restoring the original account
-                setAllAccounts(prevAccounts => 
-                    prevAccounts.map(acc => 
-                        acc.name === accountName ? originalAccount : acc
-                    )
-                );
+                throw error; // Let the catch block handle the error message
             }
+            
+            // On success, refresh the entire account list to ensure data consistency
+            await fetchAccounts();
+
         } catch (err: unknown) {
-            alert(`删除时发生意外错误: ${getErrorMessage(err)}`);
-            // Also revert UI
-             setAllAccounts(prevAccounts => 
-                prevAccounts.map(acc => 
-                    acc.name === accountName ? originalAccount : acc
-                )
-            );
+            alert(`删除失败: ${getErrorMessage(err)}`);
         }
     };
 
@@ -1043,6 +1106,52 @@ export default function AccountsPage() {
         }
     };
 
+    const handleUpdateScheduleTime = async (accountName: string, productId: string, newTime: string) => {
+        const accountToUpdate = allAccounts.find(acc => acc.name === accountName);
+        if (!accountToUpdate) {
+            alert('找不到账号！');
+            return;
+        }
+
+        const newPendingList = [...(accountToUpdate['待上架'] || [])];
+        const itemIndex = newPendingList.findIndex(item => typeof item === 'object' && item !== null && item.id === productId);
+
+        if (itemIndex === -1) {
+            // This can happen if the item is a placeholder, which we don't edit.
+            // Or if data is stale. A fetchAccounts() would resolve.
+            alert('在待上架列表中找不到该商品！');
+            return;
+        }
+        
+        const itemToUpdate = newPendingList[itemIndex];
+        if (typeof itemToUpdate === 'string') {
+            alert('无法为未调度的项目更新时间。');
+            return;
+        }
+
+        const updatedItem = {
+            ...itemToUpdate,
+            scheduled_at: new Date(newTime).toISOString(),
+        };
+
+        newPendingList[itemIndex] = updatedItem;
+
+        try {
+            const { error } = await supabase
+                .from('accounts_duplicate')
+                .update({ '待上架': newPendingList, updated_at: new Date().toISOString() })
+                .eq('name', accountName);
+
+            if (error) throw error;
+
+            alert('上架时间更新成功！');
+            setEditingSchedule(null); // Exit editing mode
+            await fetchAccounts();    // Refresh data to ensure consistency and proper sorting
+        } catch (err: unknown) {
+            alert(`更新时间失败: ${getErrorMessage(err)}`);
+        }
+    };
+
 
     // --- RENDER LOGIC ---
 
@@ -1235,29 +1344,32 @@ export default function AccountsPage() {
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
                 </div>
 
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-3 mt-2 border-t pt-3">
-                                <div className="col-span-2">
+                            <div className="flex flex-col gap-3 mt-2 border-t pt-3">
+                                <div>
                                     <TagList 
                                         title="今日上架计划" 
                                         items={account.todays_schedule || []} 
                                         color="blue" 
                                         accountName={account.name}
                                         arrayKey='待上架'
-                                        onDeleteItem={() => {alert('请在"待上架(总)"列表中删除单个商品。')}}
+                                        onDeleteItem={handleDeleteItemFromArray}
                                         layout="vertical"
                                         deployedIds={account['已上架']}
+                                        editingSchedule={editingSchedule}
+                                        setEditingSchedule={setEditingSchedule}
+                                        onUpdateTime={handleUpdateScheduleTime}
                                     />
                                 </div>
-                                {!account.todays_schedule && (
+                                <div>
                                     <TagList 
-                                        title="待上架 (总)" 
-                                        items={account['待上架']} 
-                                        color="yellow" 
+                                        title="已上架" 
+                                        items={account['已上架']} 
+                                        color="green" 
                                         accountName={account.name}
-                                        arrayKey='待上架'
+                                        arrayKey='已上架'
                                         onDeleteItem={handleDeleteItemFromArray}
                                     />
-                                )}
+                                </div>
                             </div>
 
                             <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
