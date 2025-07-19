@@ -31,7 +31,7 @@ type ScheduledProduct = {
 
 type Account = {
   name: string;
-  created_at: string;
+    created_at: string;
   updated_at: string;
   '待上架': (string | ScheduledProduct)[] | null;
   '已上架': string[] | null;
@@ -169,6 +169,8 @@ export default function AccountsPage() {
     const [passwordInput, setPasswordInput] = useState<string>('');
     const [authError, setAuthError] = useState<string | null>(null);
 
+    const [now, setNow] = useState(() => new Date());
+
     // State for accounts
     const [allAccounts, setAllAccounts] = useState<Account[]>([]); 
     const [loadingAccounts, setLoadingAccounts] = useState<boolean>(true);
@@ -226,6 +228,13 @@ export default function AccountsPage() {
         if (sessionStorage.getItem('isAuthenticated') === 'true') {
             setIsAuthenticated(true);
         }
+    }, []);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setNow(new Date());
+        }, 30 * 1000); // Update every 30 seconds
+        return () => clearInterval(interval);
     }, []);
 
     const handlePasswordSubmit = (e: React.FormEvent) => {
@@ -402,7 +411,7 @@ export default function AccountsPage() {
             setProducts(data as Product[]);
         } catch (err: unknown) {
             setErrorProducts(`加载商品列表失败: ${getErrorMessage(err)}`);
-        } finally {
+            } finally {
             setLoadingProducts(false);
         }
     }, []);
@@ -570,7 +579,7 @@ export default function AccountsPage() {
 
                 setEditingKeywords(prev => ({ ...prev, [accountName]: cleanedText }));
 
-            } else {
+        } else {
                 throw new Error("AI未能返回有效的关键词。");
             }
         } catch (e: unknown) {
@@ -877,21 +886,8 @@ export default function AccountsPage() {
             return;
         }
 
-        // --- New Prevention Logic ---
-        const deployedList = account['已上架'] || [];
-        if (deployedList.map(String).includes(String(productId))) {
-            alert('操作失败：该商品已经上架，无法重复投放。');
-            return;
-        }
-
         const currentPending = account['待上架'] || [];
         
-        // Check if product is already in the list (in any form)
-        if (currentPending.some(item => (typeof item === 'object' ? item?.id : item) == productId)) {
-             alert('该产品已在待上架列表中。');
-            return;
-        }
-
         const rule = account.scheduling_rule;
         const newPendingList = [...currentPending];
         let alertMessage = `产品 ${productId} 已添加到 ${account.name} 的待上架队列。`;
@@ -901,24 +897,27 @@ export default function AccountsPage() {
             
             const scheduledItems = currentPending.filter(item => typeof item === 'object' && item?.scheduled_at) as ScheduledProduct[];
             
-            const scheduledTodayCount = scheduledItems.length;
+            const scheduledTodayCount = scheduledItems.filter(item => new Date(item.scheduled_at) > new Date()).length;
 
             if (scheduledTodayCount < rule.items_per_day) {
                 // There is an open slot for today!
                 const intervalMillis = (24 * 60 / rule.items_per_day) * 60 * 1000;
                 
                 // Find the timestamp of the last scheduled item today, or start a new schedule
-                const lastScheduledTime = scheduledItems.length > 0 
+                const lastScheduledItem = scheduledItems.length > 0 
                     ? scheduledItems.sort((a,b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())[0]
                     : null;
 
                 let nextScheduleTime;
-                if (lastScheduledTime) {
-                    nextScheduleTime = new Date(lastScheduledTime.scheduled_at).getTime() + intervalMillis;
-                } else {
-                    // This is the first item being scheduled for today
-                    const firstPostOffset = Math.random() * 60 * 60 * 1000;
-                    nextScheduleTime = Date.now() + firstPostOffset;
+                const now = Date.now();
+
+                if (lastScheduledItem && new Date(lastScheduledItem.scheduled_at).getTime() > now) {
+                    // Last scheduled item is in the future, so schedule based on it
+                    nextScheduleTime = new Date(lastScheduledItem.scheduled_at).getTime() + intervalMillis;
+                        } else {
+                    // First item, or last item is in the past. Schedule based on the current time.
+                    const firstPostOffset = 10 * 60 * 1000; // 10 minutes from now, predictable
+                    nextScheduleTime = now + firstPostOffset;
                 }
 
                 const newScheduledItem: ScheduledProduct = {
@@ -927,12 +926,12 @@ export default function AccountsPage() {
                 };
                 newPendingList.push(newScheduledItem);
                 alertMessage = `投放成功！产品 ${productId} 已按规则自动安排上架。`;
-            } else {
+                    } else {
                  newPendingList.push(productId); // Add as a simple ID if today is full
                  alertMessage = `今日排期已满。产品 ${productId} 已添加到待上架队列末尾。`;
-            }
+                    }
 
-        } else {
+                } else {
             newPendingList.push(productId); // Default behavior if no rule
         }
 
@@ -947,7 +946,22 @@ export default function AccountsPage() {
 
             alert(alertMessage);
             
-            // Refresh data to show the newly scheduled item
+            // --- Optimistic UI Update ---
+            const updatedAccount = { ...account, '待上架': newPendingList };
+            
+            // Update the state for the detailed view immediately.
+            setSelectedAccountForProducts(updatedAccount);
+            
+            // Update the master list of accounts.
+            setAllAccounts(prevAccounts => 
+                prevAccounts.map(acc => 
+                    acc.name === selectedAccountForProducts.name 
+                        ? updatedAccount
+                        : acc
+                )
+            );
+
+            // Refresh from server in the background to ensure consistency.
             fetchAccounts();
 
         } catch (err: unknown) {
@@ -1029,6 +1043,41 @@ export default function AccountsPage() {
         }
     };
 
+    const handleDeleteFromSchedule = async (productIdToDelete: string) => {
+        if (!editingAccount) return;
+
+        const currentPending = editingAccount['待上架'] || [];
+
+        // Remove the scheduled item object and add back its ID as a simple string to the unscheduled queue.
+        const newPendingList = currentPending.filter(item => 
+            !(typeof item === 'object' && item.id === productIdToDelete)
+        );
+        newPendingList.push(productIdToDelete);
+
+        // --- Optimistic UI Update ---
+        const updatedAccount = { ...editingAccount, '待上架': newPendingList };
+        setEditingAccount(updatedAccount);
+        setAllAccounts(prev => prev.map(acc => acc.name === editingAccount.name ? updatedAccount : acc));
+
+        // --- Update Supabase in the background ---
+        try {
+            const { error } = await supabase
+                .from('accounts_duplicate')
+                .update({ '待上架': newPendingList, updated_at: new Date().toISOString() })
+                .eq('name', editingAccount.name);
+
+            if (error) throw error;
+            
+            // On success, the optimistic update is confirmed. We can refetch for ultimate consistency.
+            fetchAccounts();
+
+        } catch (err) {
+            alert(`从排期中删除失败: ${getErrorMessage(err)}`);
+            // On error, revert by fetching from server.
+            fetchAccounts();
+        }
+    };
+
 
     // --- RENDER LOGIC ---
 
@@ -1061,25 +1110,25 @@ export default function AccountsPage() {
 
     // Render Keyword Management View
     if (selectedAccountForKeywords) {
-        return (
+  return (
             <div className="p-5 font-sans bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
                  <div className="flex items-center gap-4 mb-4">
-                    <button
+                <button
                         onClick={handleBackFromKeywords}
                         className="bg-gray-500 hover:bg-gray-600 text-white text-sm py-1.5 px-4 rounded-md cursor-pointer"
-                    >
+                >
                         ← 返回
-                    </button>
+                </button>
                     <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">
                         <span className="font-normal">管理关键词: </span>
                         {selectedAccountForKeywords.name}
                     </h1>
-                    <button 
+                <button
                         onClick={handleAddNewKeyword}
                         className="ml-auto bg-green-500 hover:bg-green-600 text-white text-sm py-1.5 px-4 rounded-md"
-                    >
+                >
                         + 新增关键词
-                    </button>
+                </button>
                 </div>
 
                 {loadingKeywords && <p className="italic">正在加载关键词...</p>}
@@ -1169,7 +1218,7 @@ export default function AccountsPage() {
                                 />
                             );
                         })}
-                    </div>
+                </div>
                 )}
                  {!loadingProducts && !errorProducts && products.length === 0 && (
                     <div className="text-center col-span-full p-5 text-gray-500 dark:text-gray-400">
@@ -1193,7 +1242,7 @@ export default function AccountsPage() {
                     + 添加账号
                     </button>
                 </div>
-            
+
             <hr className="my-6 border-gray-300 dark:border-gray-600" />
 
             <h2 className="text-xl font-semibold mb-3">账号列表</h2>
@@ -1219,8 +1268,8 @@ export default function AccountsPage() {
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">小红书:</strong> {account.xhs_account || 'N/A'}</p>
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
-                            </div>
-                            
+                </div>
+
                             <div className="grid grid-cols-2 gap-x-4 gap-y-3 mt-2 border-t pt-3">
                                 <div className="col-span-2">
                                     <TagList 
@@ -1247,7 +1296,7 @@ export default function AccountsPage() {
                             </div>
 
                             <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
-                                <button
+                   <button
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         setEditingAccount(account);
@@ -1256,9 +1305,9 @@ export default function AccountsPage() {
                                 >
                                     <span>高级设置</span>
                                     <span>⚙️</span>
-                                </button>
-                            </div>
-                        </div>
+                    </button>
+                </div>
+            </div>
                     ))}
                 </div>
             )}
@@ -1271,11 +1320,11 @@ export default function AccountsPage() {
                     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md">
                         <h2 className="text-xl font-bold mb-4">添加新账号</h2>
                         <div className="space-y-3">
-                            <input 
-                                type="text" 
+                        <input
+                            type="text"
                                 placeholder="输入新账号名称 (必填)" 
-                                value={newAccountName} 
-                                onChange={(e) => setNewAccountName(e.target.value)} 
+                            value={newAccountName}
+                            onChange={(e) => setNewAccountName(e.target.value)}
                                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-500 rounded-md text-sm"
                             />
                              <input 
@@ -1313,15 +1362,15 @@ export default function AccountsPage() {
                             >
                                 取消
                             </button>
-                            <button 
-                                onClick={handleAddAccount} 
-                                disabled={isAddingAccount || !newAccountName.trim()} 
+                         <button
+                             onClick={handleAddAccount}
+                             disabled={isAddingAccount || !newAccountName.trim()}
                                 className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
-                            >
+                         >
                                 {isAddingAccount ? '添加中...' : '确认添加'}
-                            </button>
-                        </div>
+                         </button>
                     </div>
+                </div>
                 </div>
              )}
 
@@ -1350,13 +1399,13 @@ export default function AccountsPage() {
                                         rows={8}
                                         className="w-full p-2 border rounded-md text-sm bg-white dark:bg-gray-700 dark:border-gray-500"
                                     />
-                                    <button
+                                <button
                                         onClick={() => handleSaveAccountField(editingAccount.name, '文案生成prompt', editingCopywritingPrompts[editingAccount.name])}
                                         disabled={loadingStates[editingAccount.name]?.saveCopyPrompt || editingCopywritingPrompts[editingAccount.name] === (editingAccount['文案生成prompt'] || '')}
                                         className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-4 rounded disabled:opacity-50"
                                     >
                                         {loadingStates[editingAccount.name]?.saveCopyPrompt ? '保存中...' : '保存文案提示词'}
-                                    </button>
+                                </button>
                                 </div>
                                 <div>
                                     <label className="text-base font-semibold text-gray-700 dark:text-gray-300 block mb-1">业务描述</label>
@@ -1366,14 +1415,14 @@ export default function AccountsPage() {
                                         rows={4}
                                         className="w-full p-2 border rounded-md text-sm bg-white dark:bg-gray-700 dark:border-gray-500"
                                     />
-                                    <button
+                                                        <button
                                         onClick={() => handleSaveAccountField(editingAccount.name, '业务描述', editingBusinessPrompts[editingAccount.name])}
                                         disabled={loadingStates[editingAccount.name]?.saveBizPrompt || editingBusinessPrompts[editingAccount.name] === (editingAccount['业务描述'] || '')}
                                         className="w-full mt-2 bg-teal-500 hover:bg-teal-600 text-white text-sm py-2 px-4 rounded disabled:opacity-50"
                                     >
                                         {loadingStates[editingAccount.name]?.saveBizPrompt ? '保存中...' : '保存业务描述'}
-                                    </button>
-                                </div>
+                                                        </button>
+                                    </div>
                                 <div>
                                     <label className="text-base font-semibold text-gray-700 dark:text-gray-300 block mb-1">关键词生成提示词</label>
                                     <textarea
@@ -1406,13 +1455,13 @@ export default function AccountsPage() {
                                         className="w-full p-2 border rounded-md text-sm bg-white dark:bg-gray-700 dark:border-gray-500"
                                     />
                                     <div className="grid grid-cols-2 gap-2 mt-2">
-                                        <button 
+                                                       <button
                                             onClick={() => handleGenerateKeywords(editingAccount.name)}
                                             disabled={loadingStates[editingAccount.name]?.ai}
                                             className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-2 px-2 rounded disabled:opacity-50"
                                         >
                                             {loadingStates[editingAccount.name]?.ai ? '生成中...' : 'AI生成'}
-                                        </button>
+                                                       </button>
                                         <button 
                                             onClick={() => handleSaveKeywords(editingAccount.name)}
                                             disabled={loadingStates[editingAccount.name]?.saveKeywords || editingKeywords[editingAccount.name] === (editingAccount.keywords || '')}
@@ -1445,7 +1494,7 @@ export default function AccountsPage() {
                                         >
                                             保存
                                         </button>
-                                   </div>
+                            </div>
                                    <div>
                                         <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">闲鱼账号</label>
                                         <input
@@ -1461,7 +1510,7 @@ export default function AccountsPage() {
                                         >
                                             保存
                                         </button>
-                                   </div>
+                    </div>
                                    <div>
                                         <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">手机型号</label>
                                         <input
@@ -1477,7 +1526,7 @@ export default function AccountsPage() {
                                         >
                                             保存
                                         </button>
-                                   </div>
+            </div>
                                 </div>
                                  {/* Scheduling Section */}
                                 <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -1497,15 +1546,15 @@ export default function AccountsPage() {
                                         </div>
                                     </div>
                                     <div className="mt-4 flex justify-end gap-2">
-                                        <button
+                <button
                                             onClick={() => handleSaveRule(editingAccount.name)}
                                             disabled={loadingStates[editingAccount.name]?.saveRule}
                                             className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                         >
                                             {loadingStates[editingAccount.name]?.saveRule ? '保存中...' : '保存规则'}
-                                        </button>
-                                    </div>
-                                    
+                </button>
+            </div>
+
                                     {(() => {
                                         if (!editingAccount) return null;
                                         const ruleItems = editingRules[editingAccount.name]?.items_per_day;
@@ -1513,21 +1562,43 @@ export default function AccountsPage() {
                                         
                                         if (!ruleItems || ruleItems <= 0) return null;
 
-                                        const scheduledCount = Math.min(pendingItems.length, ruleItems);
-                                        const emptySlots = ruleItems - scheduledCount;
+                                        const futureScheduledItems = (pendingItems
+                                            .filter(item => typeof item === 'object' && item.scheduled_at) as ScheduledProduct[])
+                                            .filter(item => new Date(item.scheduled_at).getTime() > now.getTime())
+                                            .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+
+                                        const unscheduledCount = pendingItems.filter(item => typeof item === 'string').length;
+                                        const scheduledCount = futureScheduledItems.length;
+                                        const emptySlots = ruleItems - scheduledCount > 0 ? ruleItems - scheduledCount : 0;
+                                        
 
                                         return (
                                             <div className="mt-4 p-3 rounded-md border bg-blue-50 border-blue-200 dark:bg-blue-900/30 dark:border-blue-800">
-                                                <h4 className="text-sm font-semibold mb-2 text-blue-800 dark:text-blue-200">今日排期预览:</h4>
-                                                <div className="flex flex-col gap-1 text-xs text-blue-700 dark:text-blue-300">
-                                                    <p>
-                                                        • <span className="font-bold">{scheduledCount}</span> 个商品将从&quot;待上架&quot;队列中随机选择，并在未来24小时内发布。
-                                                    </p>
-                                                    {emptySlots > 0 && (
-                                                        <p>
-                                                            • 今日剩余 <span className="font-bold">{emptySlots}</span> 个待排期空位 (待上架商品不足)。
+                                                <h4 className="text-sm font-semibold mb-2 text-blue-800 dark:text-blue-200">今日上架计划 (规则: {ruleItems}个/天)</h4>
+                                                <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
+                                                    {futureScheduledItems.map(item => (
+                                                        <div key={item.id} className="flex justify-between items-center group">
+                                                            <p className="truncate">
+                                                                • ID: {item.id} (预计: {new Date(item.scheduled_at).toLocaleTimeString('zh-CN')})
+                                                            </p>
+                                                            <button 
+                                                                onClick={() => handleDeleteFromSchedule(item.id)}
+                                                                className="text-red-500 hover:text-red-700 ml-2 text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                aria-label={`删除排期 ${item.id}`}
+                                                            >
+                                                                删除
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                    {emptySlots > 0 && Array.from({ length: emptySlots }).map((_, index) => (
+                                                        <p key={`empty-${index}`} className="text-gray-400 dark:text-gray-500 italic">
+                                                            • [空闲排期位]
                                                         </p>
-                                                    )}
+                                                    ))}
+                                                </div>
+                                                <div className="mt-2 pt-2 border-t border-blue-200 dark:border-blue-700 text-xs space-y-0.5">
+                                                    <p className="font-medium">• {scheduledCount} / {ruleItems} 个位置已预定。</p>
+                                                    <p className="text-gray-600 dark:text-gray-400">• {unscheduledCount} 个商品在队列中等待排期。</p>
                                                 </div>
                                             </div>
                                         );

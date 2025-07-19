@@ -232,12 +232,12 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                  <div className="absolute top-2 right-2 z-10 flex gap-2">
                     <button onClick={() => onDuplicate(product.id)} className="p-1 bg-blue-500 text-white rounded-full hover:bg-blue-700 opacity-50 group-hover:opacity-100 transition-opacity">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                    </button>
+             </button>
                     <button onClick={() => onDelete(product.id)} className="p-1 bg-red-500 text-white rounded-full hover:bg-red-700 opacity-50 group-hover:opacity-100 transition-opacity">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                 </div>
-            </div>
+                </div>
 
             {/* Image & Search */}
             {imageUrl && (
@@ -250,8 +250,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         style={{ objectFit: 'cover' }}
                         className="rounded-md"
                     />
-                </div>
-            )}
+                        </div>
+                    )}
             <div className="flex gap-2">
                  <div className="relative flex-1 group/tooltip">
                     <button onClick={findSimilarImagesYandex} disabled={!imageUrl} className="w-full text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 py-1 rounded-md disabled:opacity-50">搜图(Yandex)</button>
@@ -274,7 +274,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
                     </div>
                 </div>
-            </div>
+                 </div>
 
             {/* Image URL Update */}
             <div className="flex gap-2">
