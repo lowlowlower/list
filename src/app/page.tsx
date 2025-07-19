@@ -349,12 +349,9 @@ export default function AccountsPage() {
                 const joinedKeywords = (keywordsMap.get(acc.name) || []).join('\n');
                 
                 // --- Data Reconciliation ---
-                const deployedIds = new Set((acc['已上架'] || []).map(String));
+                // Allow products to be re-scheduled even if already in '已上架'
                 const rawPendingProducts = (acc as Account)['待上架'] || [];
-                const cleanPendingProducts = rawPendingProducts.filter(item => {
-                    const id = typeof item === 'object' && item !== null ? item.id : item;
-                    return !deployedIds.has(String(id));
-                });
+                const cleanPendingProducts = rawPendingProducts;
                 
                 // --- Generate Today's Schedule Preview ---
                 let todays_schedule: ScheduledProduct[] | null = null;
