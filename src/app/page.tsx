@@ -172,34 +172,32 @@ const TagList: React.FC<{
                 <div key={index} className={`w-full flex justify-between items-center px-2 py-1.5 rounded-md text-xs font-mono bg-${itemColor}-100 dark:bg-${itemColor}-900/50 text-${itemColor}-800 dark:text-${itemColor}-300 group/tag`}>
                     <span><strong>ID: {scheduledItem.id}</strong> @ {displayTime}</span>
                     <div className="flex items-center gap-1.5 opacity-0 group-hover/tag:opacity-100 transition-opacity">
-                        {isDeployed ? (
+                        {isDeployed && (
                             <span className="font-sans font-bold text-xs pr-2">✅ 已上架</span>
-                        ) : (
-                            <>
-                                {onUpdateTime && setEditingSchedule && (
-                                     <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setEditingSchedule({ accountName, id: scheduledItem.id, newTime: scheduledItem.scheduled_at });
-                                        }}
-                                        className="p-1 text-lg leading-none rounded-full text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200"
-                                        aria-label={`Edit time for ${scheduledItem.id}`}
-                                    >
-                                        ✏️
-                                    </button>
-                                )}
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onDeleteItem(accountName, arrayKey, String(scheduledItem.id));
-                                    }}
-                                    className="p-1.5 text-2xl leading-none rounded-full text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
-                                    aria-label={`Remove ${scheduledItem.id}`}
-                                >
-                                    &times;
-                                </button>
-                            </>
                         )}
+
+                        {onUpdateTime && setEditingSchedule && (
+                             <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingSchedule({ accountName, id: scheduledItem.id, newTime: scheduledItem.scheduled_at });
+                                }}
+                                className="p-1 text-lg leading-none rounded-full text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200"
+                                aria-label={`Edit time for ${scheduledItem.id}`}
+                            >
+                                ✏️
+                            </button>
+                        )}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteItem(accountName, arrayKey, String(scheduledItem.id));
+                            }}
+                            className="p-1.5 text-2xl leading-none rounded-full text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
+                            aria-label={`Remove ${scheduledItem.id}`}
+                        >
+                            &times;
+                        </button>
                     </div>
                 </div>
             );
