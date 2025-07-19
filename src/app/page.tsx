@@ -1043,41 +1043,6 @@ export default function AccountsPage() {
         }
     };
 
-    const handleDeleteFromSchedule = async (productIdToDelete: string) => {
-        if (!editingAccount) return;
-
-        const currentPending = editingAccount['待上架'] || [];
-
-        // Remove the scheduled item object and add back its ID as a simple string to the unscheduled queue.
-        const newPendingList = currentPending.filter(item => 
-            !(typeof item === 'object' && item.id === productIdToDelete)
-        );
-        newPendingList.push(productIdToDelete);
-
-        // --- Optimistic UI Update ---
-        const updatedAccount = { ...editingAccount, '待上架': newPendingList };
-        setEditingAccount(updatedAccount);
-        setAllAccounts(prev => prev.map(acc => acc.name === editingAccount.name ? updatedAccount : acc));
-
-        // --- Update Supabase in the background ---
-        try {
-            const { error } = await supabase
-                .from('accounts_duplicate')
-                .update({ '待上架': newPendingList, updated_at: new Date().toISOString() })
-                .eq('name', editingAccount.name);
-
-            if (error) throw error;
-            
-            // On success, the optimistic update is confirmed. We can refetch for ultimate consistency.
-            fetchAccounts();
-
-        } catch (err) {
-            alert(`从排期中删除失败: ${getErrorMessage(err)}`);
-            // On error, revert by fetching from server.
-            fetchAccounts();
-        }
-    };
-
 
     // --- RENDER LOGIC ---
 
@@ -1577,18 +1542,9 @@ export default function AccountsPage() {
                                                 <h4 className="text-sm font-semibold mb-2 text-blue-800 dark:text-blue-200">今日上架计划 (规则: {ruleItems}个/天)</h4>
                                                 <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
                                                     {futureScheduledItems.map(item => (
-                                                        <div key={item.id} className="flex justify-between items-center group">
-                                                            <p className="truncate">
-                                                                • ID: {item.id} (预计: {new Date(item.scheduled_at).toLocaleTimeString('zh-CN')})
-                                                            </p>
-                                                            <button 
-                                                                onClick={() => handleDeleteFromSchedule(item.id)}
-                                                                className="text-red-500 hover:text-red-700 ml-2 text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity"
-                                                                aria-label={`删除排期 ${item.id}`}
-                                                            >
-                                                                删除
-                                                            </button>
-                                                        </div>
+                                                        <p key={item.id} className="truncate">
+                                                            • ID: {item.id} (预计: {new Date(item.scheduled_at).toLocaleTimeString('zh-CN')})
+                                                        </p>
                                                     ))}
                                                     {emptySlots > 0 && Array.from({ length: emptySlots }).map((_, index) => (
                                                         <p key={`empty-${index}`} className="text-gray-400 dark:text-gray-500 italic">
