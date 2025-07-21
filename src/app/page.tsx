@@ -146,6 +146,7 @@ type Account = {
   scheduling_rule?: { items_per_day: number } | null; // For the new scheduling rule
   todays_schedule?: ScheduledProduct[] | null; // For displaying today's generated schedule
   today_new_products?: number; // For the new count on the main page
+  isPending?: boolean; // Add isPending to the product type
 };
 
 type AccountKeywords = {
@@ -169,6 +170,7 @@ type Product = {
   '建议投放账号': string | null;
   '上架时间': string | null;
   keywords_extracted_at?: string | null;
+  isPending?: boolean; // Add isPending to the product type
 };
 
 type ProductSchedule = {
@@ -1186,6 +1188,13 @@ export default function AccountsPage() {
                         : acc
                 )
             );
+            
+            // Manually update the specific product's pending state in the detail view
+            setProducts(prevProducts => 
+                prevProducts.map(p => 
+                    p.id === productId ? { ...p, isPending: true } : p
+                )
+            );
 
             // Refresh from server in the background to ensure consistency.
             fetchAccounts();
@@ -1314,6 +1323,15 @@ export default function AccountsPage() {
             alert(`更新时间失败: ${getErrorMessage(err)}`);
         }
     };
+
+    const handleProductUpdate = useCallback(async () => {
+        // Refetch accounts to update any potential changes in scheduling/pending lists
+        await fetchAccounts();
+        // If we are in a product detail view, also refetch the product list for that account
+        if (selectedAccountForProducts) {
+            await fetchProductsForAccount(selectedAccountForProducts.name);
+        }
+    }, [fetchAccounts, selectedAccountForProducts, fetchProductsForAccount]);
 
 
     // --- RENDER LOGIC ---
@@ -1484,7 +1502,7 @@ export default function AccountsPage() {
                                     onDelete={handleDeleteProduct} 
                                     onDuplicate={handleDuplicateProduct}
                                     onDeploy={handleDeployProduct}
-                                    onUpdate={fetchAccounts}
+                                    onUpdate={handleProductUpdate}
                                     callAi={callAIApiWithFallback}
                                     accountName={selectedAccountForProducts.name}
                                     onSaveKeywords={handleSaveKeywordsToAccount}
