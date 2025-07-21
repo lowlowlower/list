@@ -46,6 +46,26 @@ const getErrorMessage = (error: unknown): string => {
     return String(error);
 };
 
+const getRelativeTime = (isoString: string) => {
+    const date = new Date(isoString);
+    const today = new Date();
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+    const diffTime = startOfToday.getTime() - new Date(date).setHours(0,0,0,0);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (date >= startOfToday) {
+        return "今天爬取";
+    }
+    if (diffDays === 0) { // Should be caught by the above, but as a fallback
+        return "今天爬取";
+    }
+    if (diffDays === 1) {
+         return "1天前爬取";
+    }
+    return `${diffDays}天前爬取`;
+};
+
 // --- Main Component ---
 const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicate, onDeploy, onUpdate, callAi, accountName, onSaveKeywords, customCopywritingPrompt, businessDescription, onManageAccountKeywords, deployedTo, isPending }) => {
     // Component State
@@ -217,7 +237,19 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
     return (
         <article className="product-card border border-gray-300 dark:border-gray-700 rounded-lg shadow-md bg-white dark:bg-gray-800 flex flex-col gap-3 p-4 relative group">
             <div className="flex justify-between items-start">
-                <div className="text-sm pr-8"><strong>ID:</strong> {product.id} | <strong>价格:</strong> {product.价格 || 'N/A'}</div>
+                <div className="text-sm pr-8">
+                    <div><strong>ID:</strong> {product.id} | <strong>价格:</strong> {product.价格 || 'N/A'}</div>
+                    <div className="mt-2 flex items-center gap-2">
+                        <span className="text-sm font-semibold bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 py-1 px-2.5 rounded-md">
+                            {getRelativeTime(product.created_at)}
+                        </span>
+                        {product.keyword && (
+                            <span className="text-sm font-semibold bg-teal-100 dark:bg-teal-800 text-teal-800 dark:text-teal-200 py-1 px-2.5 rounded-md">
+                                关键词: {product.keyword}
+                            </span>
+                        )}
+                    </div>
+                </div>
                 <div className="absolute top-2 right-2 z-10 flex gap-2">
                     <button onClick={() => onDuplicate(product.id)} className="p-1 bg-blue-500 text-white rounded-full hover:bg-blue-700 opacity-50 group-hover:opacity-100 transition-opacity">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>

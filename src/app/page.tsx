@@ -144,6 +144,7 @@ type Account = {
   keywords?: string | null; // <-- Add keywords property
   scheduling_rule?: { items_per_day: number } | null; // For the new scheduling rule
   todays_schedule?: ScheduledProduct[] | null; // For displaying today's generated schedule
+  today_new_products?: number; // For the new count on the main page
 };
 
 type AccountKeywords = {
@@ -342,6 +343,7 @@ export default function AccountsPage() {
     const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState<boolean>(false);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null); // State for the account settings modal
     const [editingSchedule, setEditingSchedule] = useState<{ accountName: string; id: string; newTime: string } | null>(null);
+    const [timeFilter, setTimeFilter] = useState<string>('all');
     
     // State for Keywords and Prompts
     const [editingKeywords, setEditingKeywords] = useState<{ [key: string]: string }>({});
@@ -415,13 +417,14 @@ export default function AccountsPage() {
         setLoadingAccounts(true);
         setErrorAccounts(null);
         try {
-            // Fetch accounts and keywords in parallel
-            const [accountsPromise, keywordsPromise] = await Promise.all([
+            // Fetch accounts, keywords, and all products in parallel
+            const [accountsPromise, keywordsPromise, productsPromise] = await Promise.all([
                  supabase
                     .from('accounts_duplicate')
                     .select('name, created_at, updated_at, "待上架", "已上架", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule"') // Fetch new rule
                     .order('name', { ascending: true }),
-                 supabase.from('important_keywords_本人').select('id, account_name, keyword') // <-- Use new 'keyword' column
+                 supabase.from('important_keywords_本人').select('id, account_name, keyword'),
+                 supabase.from('search_results_duplicate_本人').select('type, created_at') // Fetch only necessary fields for counting
             ]);
             
             const { data: accounts, error: accountsError } = accountsPromise;
@@ -429,6 +432,21 @@ export default function AccountsPage() {
 
             const { data: keywordsData, error: keywordsError } = keywordsPromise;
             if (keywordsError) throw keywordsError;
+
+            const { data: productsData, error: productsError } = productsPromise;
+            if (productsError) throw productsError;
+
+            // --- Pre-calculate today's new products for each account ---
+            const today = new Date();
+            const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const newProductsCountMap = new Map<string, number>();
+
+            for (const product of productsData) {
+                if (new Date(product.created_at) >= startOfToday) {
+                    const currentCount = newProductsCountMap.get(product.type!) || 0;
+                    newProductsCountMap.set(product.type!, currentCount + 1);
+                }
+            }
 
             // Group keywords by account_name
             const keywordsMap = new Map<string, string[]>();
@@ -530,6 +548,7 @@ export default function AccountsPage() {
                     '业务描述': acc['业务描述'] || defaultBusinessPrompt,
                     '文案生成prompt': acc['文案生成prompt'] || defaultCopywritingPrompt, // Set default
                     todays_schedule: todays_schedule, // Attach today's schedule
+                    today_new_products: newProductsCountMap.get(acc.name) || 0, // Add the new count
                 };
             });
 
@@ -1399,7 +1418,22 @@ export default function AccountsPage() {
                     <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">
                         <span className="font-normal">账号: </span>
                         {selectedAccountForProducts.name}
-            </h1>
+                    </h1>
+                     <div className="ml-auto flex items-center gap-4">
+                        <span className="text-sm font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 py-1 px-3 rounded-full">
+                            今日获取: {products.filter(p => new Date(p.created_at) >= new Date(new Date().setHours(0, 0, 0, 0))).length} 个商品
+                        </span>
+                        <select
+                            value={timeFilter}
+                            onChange={(e) => setTimeFilter(e.target.value)}
+                            className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm py-1.5 px-3 text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        >
+                            <option value="all">全部时间</option>
+                            <option value="today">今天</option>
+                            <option value="yesterday">昨天</option>
+                            <option value="week">一周内</option>
+                        </select>
+                    </div>
                 </div>
 
                 {/* Global prompt section is removed */}
@@ -1412,7 +1446,29 @@ export default function AccountsPage() {
 
                 {!loadingProducts && !errorProducts && (
                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                        {products.map(product => {
+                        {products.filter(product => {
+                            if (timeFilter === 'all') return true;
+                            const productDate = new Date(product.created_at);
+                            const today = new Date();
+                            const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                            
+                            if (timeFilter === 'today') {
+                                return productDate >= startOfToday;
+                            }
+                            
+                            if (timeFilter === 'yesterday') {
+                                const startOfYesterday = new Date(startOfToday);
+                                startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+                                return productDate >= startOfYesterday && productDate < startOfToday;
+                            }
+
+                            if (timeFilter === 'week') {
+                                const startOfWeek = new Date(startOfToday);
+                                startOfWeek.setDate(startOfWeek.getDate() - 7);
+                                return productDate >= startOfWeek;
+                            }
+                            return true;
+                        }).map(product => {
                             const deployedTo = productSchedules
                                 .filter(s => s.product_id === product.id)
                                 .map(s => s.account_name);
@@ -1489,6 +1545,11 @@ export default function AccountsPage() {
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">小红书:</strong> {account.xhs_account || 'N/A'}</p>
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
+                                <div className="mt-2">
+                                    <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold mr-2 px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
+                                        今日新增: {account.today_new_products}
+                                    </span>
+                                </div>
                 </div>
 
                             <div className="flex flex-col gap-3 mt-2 border-t pt-3">
