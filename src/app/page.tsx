@@ -9,6 +9,9 @@ const supabaseUrl = 'https://urfibhtfqgffpanpsjds.supabase.co';
 const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyZmliaHRmcWdmZnBhbnBzamRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU3ODU2NDUsImV4cCI6MjA1MTM2MTY0NX0.Q1WPGBj23uSL3RKhYxGhs7Si1_HfrvC9P-JxkXl6eVE';
 const geminiApiKey = "AIzaSyApuy_ax9jhGXpUdlgI6w_0H5aZ7XiY9vU";
 
+const deepseekApiKey = 'sk-78a9fd015e054281a3eb0a0712d5e6d0';
+const deepseekApiUrl = 'https://api.deepseek.com/chat/completions';
+
 if (!supabaseUrl || !supabaseAnonKey || !geminiApiKey) {
     console.error("Supabase or Gemini environment variables are not set!");
 }
@@ -20,6 +23,103 @@ const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/ge
 const getErrorMessage = (error: unknown): string => {
     if (error instanceof Error) return error.message;
     return String(error);
+};
+
+// --- Keyword Management Helper ---
+const handleSaveKeywordsToAccount = async (accountName: string, keywords: string[]) => {
+    const keywordsToAdd = keywords.map(k => k.trim()).filter(Boolean);
+    if (keywordsToAdd.length === 0) {
+        alert("没有要保存的关键词。");
+        return;
+    }
+
+    try {
+        // Fetch existing keywords to avoid duplicates
+        const { data: existingKeywords, error: fetchKwError } = await supabase
+            .from('important_keywords_本人')
+            .select('keyword')
+            .eq('account_name', accountName);
+
+        if (fetchKwError) throw fetchKwError;
+
+        const existingKeywordSet = new Set(existingKeywords.map(k => k.keyword));
+        const newUniqueKeywords = keywordsToAdd.filter(k => !existingKeywordSet.has(k));
+
+        if (newUniqueKeywords.length > 0) {
+            const newKeywordRows = newUniqueKeywords.map(kw => ({
+                account_name: accountName,
+                keyword: kw
+            }));
+            const { error: insertKwError } = await supabase
+                .from('important_keywords_本人')
+                .insert(newKeywordRows);
+
+            if (insertKwError) throw insertKwError;
+            
+            alert(`成功向 ${accountName} 添加了 ${newUniqueKeywords.length} 个新关键词！`);
+            // The fetchAccounts() call will be triggered by the caller to refresh UI
+        } else {
+            alert("所有关键词都已存在于此账号的列表中。");
+        }
+    } catch (error) {
+        console.error(`Failed to save keywords for account ${accountName}:`, getErrorMessage(error));
+        alert(`保存关键词到账号列表失败: ${getErrorMessage(error)}`);
+    }
+};
+
+const callAIApiWithFallback = async (prompt: string): Promise<string> => {
+    // 1. Try Gemini First
+    try {
+        console.log("Attempting to call Gemini API...");
+        const res = await fetch(geminiApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(`Gemini API Error: ${getErrorMessage(errorData.error)}`);
+        }
+        const data = await res.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) {
+            throw new Error("Gemini API returned an empty response.");
+        }
+        console.log("Successfully received response from Gemini.");
+        return text;
+    } catch (geminiError) {
+        console.warn(`Gemini API call failed: ${getErrorMessage(geminiError)}`);
+        console.log("Falling back to DeepSeek API...");
+
+        // 2. Fallback to DeepSeek
+        try {
+            const res = await fetch(deepseekApiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${deepseekApiKey}`
+                },
+                body: JSON.stringify({
+                    model: "deepseek-chat",
+                    messages: [{ role: "user", content: prompt }]
+                })
+            });
+            if (!res.ok) {
+                const errorData = await res.json();
+                throw new Error(`DeepSeek API Error: ${getErrorMessage(errorData.error)}`);
+            }
+            const data = await res.json();
+            const text = data.choices?.[0]?.message?.content;
+            if (!text) {
+                throw new Error("DeepSeek API returned an empty response.");
+            }
+            console.log("Successfully received response from DeepSeek.");
+            return text;
+        } catch (deepseekError) {
+            console.error(`DeepSeek API call also failed: ${getErrorMessage(deepseekError)}`);
+            throw new Error(`Both Gemini and DeepSeek APIs failed. Last error: ${getErrorMessage(deepseekError)}`);
+        }
+    }
 };
 
 // --- Type Definitions ---
@@ -66,6 +166,7 @@ type Product = {
   '账号分类': string | null;
   '建议投放账号': string | null;
   '上架时间': string | null;
+  keywords_extracted_at?: string | null;
 };
 
 type ProductSchedule = {
@@ -398,11 +499,11 @@ export default function AccountsPage() {
 
                         if (nextProductId) {
                             // Add a real product
-                            finalSchedule.push({
+                        finalSchedule.push({
                                 id: nextProductId,
                                 scheduled_at: new Date(nextScheduleTime).toISOString(),
-                                isPlaceholder: false,
-                            });
+                            isPlaceholder: false,
+                        });
                         } else {
                             // Add a placeholder
                             finalSchedule.push({
@@ -622,39 +723,24 @@ export default function AccountsPage() {
         `;
 
         try {
-            const res = await fetch(geminiApiUrl, { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ contents: [{ parts: [{ text: finalPrompt }] }] }) 
-            });
-            if (!res.ok) {
-                const errorData = await res.json();
-                throw new Error(`AI API 错误: ${errorData.error.message}`);
-            }
-            const data = await res.json();
-            const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            const aiText = await callAIApiWithFallback(finalPrompt);
 
-            if (aiText) {
-                 // Post-process the AI output to ensure clean, one-keyword-per-line format
-                const cleanedText = aiText
-                    .split('\n') // Split into lines
-                    .map((line: string) => 
-                        line
-                            .replace(/\*/g, '') // Forcefully remove all asterisks
-                            .replace(/^\s*\d+\.\s*/, '') // Remove leading numbers like "1. "
-                            .replace(/^\s*[\-]\s*/, '') // Remove leading dashes
-                            .replace(/\s*\(.*\)\s*$/, '') // Remove trailing explanations in parentheses
-                            .trim() // Trim whitespace
-                    )
-                    // Filter out empty lines and conversational filler
-                    .filter((line: string) => line.length > 0 && !/^\s*(好的|根据您|这里是|以下是)/.test(line)) 
-                    .join('\n'); // Join them back with newlines
+            // Post-process the AI output to ensure clean, one-keyword-per-line format
+            const cleanedText = aiText
+                .split('\n') // Split into lines
+                .map((line: string) => 
+                    line
+                        .replace(/\*/g, '') // Forcefully remove all asterisks
+                        .replace(/^\s*\d+\.\s*/, '') // Remove leading numbers like "1. "
+                        .replace(/^\s*[\-]\s*/, '') // Remove leading dashes
+                        .replace(/\s*\(.*\)\s*$/, '') // Remove trailing explanations in parentheses
+                        .trim() // Trim whitespace
+                )
+                // Filter out empty lines and conversational filler
+                .filter((line: string) => line.length > 0 && !/^\s*(好的|根据您|这里是|以下是)/.test(line)) 
+                .join('\n'); // Join them back with newlines
 
-                setEditingKeywords(prev => ({ ...prev, [accountName]: cleanedText }));
-
-        } else {
-                throw new Error("AI未能返回有效的关键词。");
-            }
+            setEditingKeywords(prev => ({ ...prev, [accountName]: cleanedText }));
         } catch (e: unknown) {
             alert(`关键词生成失败: ${getErrorMessage(e)}`);
         } finally {
@@ -937,12 +1023,74 @@ export default function AccountsPage() {
             alert('错误：没有选中的账号。');
             return;
         }
-        
+
         const account = allAccounts.find(acc => acc.name === selectedAccountForProducts.name);
         if (!account) {
             alert('错误：找不到当前账号的数据。');
             return;
         }
+
+        const productToDeploy = products.find(p => p.id === productId);
+        if (!productToDeploy) {
+            alert('错误：找不到要投放的商品。');
+            return;
+        }
+
+        // --- Automatic Keyword Extraction ---
+        if (!productToDeploy.keywords_extracted_at) {
+            console.log(`Product ${productId} needs keywords. Extracting...`);
+            const original_text = productToDeploy.result_text_content || '';
+            const businessDescription = account['业务描述'] || '';
+            const prompt = `
+                请基于以下业务描述和产品文案，提取5-8个最相关的关键词。
+                要求：
+                1.  每个关键词占一行。
+                2.  不要添加任何编号、解释或无关文字。
+                3.  那些英文关键词是最重要的 不要删除
+                ---
+                业务描述:
+                ${businessDescription}
+                ---
+                产品文案:
+                ${original_text}
+                ---
+            `;
+
+            try {
+                const keywordsText = await callAIApiWithFallback(prompt);
+                const keywordsArray = keywordsText.split('\n').map(k => k.trim()).filter(Boolean);
+
+                if (keywordsArray.length > 0) {
+                    // 1. Save keywords to the product itself
+                    const { error: updateError } = await supabase
+                        .from('search_results_duplicate_本人')
+                        .update({ 
+                            'ai提取关键词': keywordsArray.join('\n'),
+                            'keywords_extracted_at': new Date().toISOString() 
+                        })
+                        .eq('id', productId);
+                    if (updateError) throw updateError;
+                    
+                    // 2. Add keywords to the account's list
+                    await handleSaveKeywordsToAccount(account.name, keywordsArray);
+
+                    // 3. Update local state for immediate UI feedback
+                    setProducts(prevProducts =>
+                        prevProducts.map(p =>
+                            p.id === productId
+                                ? { ...p, 'ai提取关键词': keywordsArray.join('\n'), 'keywords_extracted_at': new Date().toISOString() }
+                                : p
+                        )
+                    );
+                    fetchAccounts(); // Refresh to get latest account keyword count
+                    console.log(`Successfully extracted and saved keywords for ${productId}`);
+                }
+            } catch (e) {
+                alert(`自动提取关键词失败: ${getErrorMessage(e)}\n\n商品仍会添加到待上架列表，但您需要稍后手动提取关键词。`);
+            }
+        }
+        // --- End of Automatic Keyword Extraction ---
+
 
         const currentPending = account['待上架'] || [];
         
@@ -1278,7 +1426,11 @@ export default function AccountsPage() {
                                     product={product} 
                                     onDelete={handleDeleteProduct} 
                                     onDuplicate={handleDuplicateProduct}
-                                    onDeploy={handleDeployProduct} 
+                                    onDeploy={handleDeployProduct}
+                                    onUpdate={fetchAccounts}
+                                    callAi={callAIApiWithFallback}
+                                    accountName={selectedAccountForProducts.name}
+                                    onSaveKeywords={handleSaveKeywordsToAccount}
                                     customCopywritingPrompt={selectedAccountForProducts?.['文案生成prompt'] || ''} 
                                     businessDescription={selectedAccountForProducts?.['业务描述'] || ''}
                                     onManageAccountKeywords={() => handleAccountSelectForKeywords(selectedAccountForProducts!)}
@@ -1566,7 +1718,7 @@ export default function AccountsPage() {
                                         >
                                             保存
                                         </button>
-                            </div>
+            </div>
                                    <div>
                                         <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">闲鱼账号</label>
                                         <input
