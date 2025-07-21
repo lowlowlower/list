@@ -141,6 +141,7 @@ type Account = {
   xhs_account: string | null;
   '闲鱼账号': string | null;
   '手机型号': string | null;
+  'xhs_头像': string | null;
   keywords?: string | null; // <-- Add keywords property
   scheduling_rule?: { items_per_day: number } | null; // For the new scheduling rule
   todays_schedule?: ScheduledProduct[] | null; // For displaying today's generated schedule
@@ -421,7 +422,7 @@ export default function AccountsPage() {
             const [accountsPromise, keywordsPromise, productsPromise] = await Promise.all([
                  supabase
                     .from('accounts_duplicate')
-                    .select('name, created_at, updated_at, "待上架", "已上架", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule"') // Fetch new rule
+                    .select('name, created_at, updated_at, "待上架", "已上架", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule", "xhs_头像"')
                     .order('name', { ascending: true }),
                  supabase.from('important_keywords_本人').select('id, account_name, keyword'),
                  supabase.from('search_results_duplicate_本人').select('type, created_at') // Fetch only necessary fields for counting
@@ -1540,9 +1541,18 @@ export default function AccountsPage() {
                 >
                                 {deletingAccount === account.name ? "..." : "✕"}
                 </button>
-                            <h3 className="font-bold text-lg border-b pb-2 pr-8">{account.name}</h3>
-                             <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400">
-                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">小红书:</strong> {account.xhs_account || 'N/A'}</p>
+                            <div className="flex items-center gap-3 border-b pb-2 pr-8">
+                                {account['xhs_头像'] && (
+                                    <img src={account['xhs_头像']} alt={account.name} className="w-12 h-12 rounded-full object-cover border-2 border-pink-300" />
+                                )}
+                                <div className="flex-grow">
+                                    <h3 className="font-bold text-lg">{account.name}</h3>
+                                    {account.xhs_account && (
+                                        <p className="text-xs text-gray-500">@{account.xhs_account}</p>
+                                    )}
+                                </div>
+                            </div>
+                             <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400 mt-2">
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
                                 <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
                                 <div className="mt-2">

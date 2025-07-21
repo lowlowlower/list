@@ -200,7 +200,6 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify({ "修改后文案": modifiedDescription }) });
             if (!res.ok) throw new Error((await res.json()).message);
             setIsDescriptionDirty(false);
-            alert("文案已保存");
             onUpdate();
             setIsEditingModalOpen(false);
         } catch (e) { setCardError(getErrorMessage(e)); } finally { setIsLoadingConfirm(false); }
