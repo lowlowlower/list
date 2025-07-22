@@ -88,6 +88,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
     const [isGeneratingImage, setIsGeneratingImage] = useState(false);
     const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null); // This will hold the base64 data URL
     const [isSavingImage, setIsSavingImage] = useState(false);
+    const [isFindingImage, setIsFindingImage] = useState(false);
     const originalTextareaRef = useRef<HTMLTextAreaElement>(null);
     const modifiedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -107,6 +108,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setIsGeneratingImage(false);
         setGeneratedImageUrl(null);
         setIsSavingImage(false);
+        setIsFindingImage(false);
     }, [product]);
 
     const handleDeleteKeyword = async (keywordToDelete: string) => {
@@ -249,6 +251,47 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         }
     };
 
+    const handleAiFindImage = async () => {
+        setIsFindingImage(true);
+        setCardError(null);
+        try {
+            // 1. Get the best keyword from AI
+            const keywordPrompt = `
+                Based on the following product description, what is the single best English keyword for finding a representative stock photo?
+                Return ONLY the single keyword, with no explanation or extra text.
+                Description:
+                ---
+                ${modifiedDescription}
+                ---
+            `;
+            const keyword = await callAi(keywordPrompt);
+            if (!keyword.trim()) {
+                throw new Error("AI did not return a keyword.");
+            }
+
+            // 2. Call our backend API to get an image URL
+            const response = await fetch('/api/find-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ keyword: keyword.trim() })
+            });
+
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.error || 'Failed to find image.');
+            }
+
+            // 3. Save the new URL to the product
+            await saveImageUrlToProduct(result.imageUrl);
+            // The card will be updated automatically via onUpdate() triggered by saveImageUrlToProduct
+
+        } catch (e) {
+            setCardError(getErrorMessage(e));
+        } finally {
+            setIsFindingImage(false);
+        }
+    };
+
     const modifyTextWithAI = async () => {
         if (!customCopywritingPrompt.trim()) return setCardError('账号专属的文案提示词为空');
         setIsLoadingAI(true);
@@ -388,6 +431,14 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                     <Image src={imageUrl} alt="商品图片" fill sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw" style={{ objectFit: 'cover' }} className="rounded-md" />
                         </div>
                     )}
+            
+            <div className="mt-1">
+                <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">原始文案</label>
+                <p className="mt-1 p-2 w-full text-xs bg-gray-100 dark:bg-gray-900/50 rounded-md border dark:border-gray-600/50 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono">
+                    {product.result_text_content || '无原始文案'}
+                </p>
+            </div>
+
             <div className="flex gap-2">
                  <div className="relative flex-1 group/tooltip">
                     <button onClick={findSimilarImagesYandex} disabled={!imageUrl} className="w-full text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 py-1 rounded-md disabled:opacity-50">搜图(Yandex)</button>
@@ -414,7 +465,15 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             <div className="flex gap-2">
                 <input value={newImageUrl} onChange={(e) => setNewImageUrl(e.target.value)} placeholder="输入新图片URL..." className="w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600 flex-grow" />
                 <button onClick={updateProductImage} className="text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 px-3 rounded-md">更新</button>
-                </div>
+                <button
+                    onClick={handleAiFindImage}
+                    disabled={isFindingImage}
+                    className="text-xs bg-purple-500 hover:bg-purple-600 text-white px-3 rounded-md disabled:opacity-50 flex-shrink-0"
+                    title="让AI根据文案寻找一张最匹配的图片并自动更新"
+                >
+                    {isFindingImage ? '寻找中...' : '🤖 AI找图'}
+                </button>
+            </div>
              <div>
                 <button onClick={() => setIsEditingModalOpen(true)} className="w-full bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-md py-2 px-3 text-sm text-center">
                     查看 / 编辑文案
@@ -522,7 +581,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         {generatedImageUrl && (
                             <div className="mt-4 p-4 border-2 border-dashed border-green-400 rounded-lg">
                                 <p className="text-lg font-semibold mb-2 text-center">生成效果预览</p>
-                                <div className="relative w-full max-w-lg mx-auto aspect-square border rounded-md overflow-hidden bg-gray-100">
+                                <div className="relative w-full max-w-md mx-auto aspect-square border rounded-md overflow-hidden bg-gray-100">
                                     <Image src={generatedImageUrl} alt="生成的图片" fill style={{ objectFit: 'contain' }} />
                                 </div>
                                 <div className="mt-4 text-center">

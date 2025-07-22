@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@hello-pangea/dnd": "^18.0.1",
     "@supabase/supabase-js": "^2.50.5",
     "@vercel/postgres": "^0.10.0",
     "axios": "^1.10.0",
