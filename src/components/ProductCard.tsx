@@ -27,6 +27,7 @@ interface ProductCardProps {
     callAi: (prompt: string) => Promise<string>;
     accountName: string;
     onSaveKeywords: (accountName: string, keywords: string[]) => Promise<void>;
+    onDeleteKeywordFromLibrary: (accountName: string, keyword: string) => Promise<void>;
     customCopywritingPrompt: string; // Replaced globalPrompt
     businessDescription: string;
     onManageAccountKeywords: () => void; // New prop for navigation
@@ -67,7 +68,7 @@ const getRelativeTime = (isoString: string) => {
 };
 
 // --- Main Component ---
-const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicate, onDeploy, onUpdate, callAi, accountName, onSaveKeywords, customCopywritingPrompt, businessDescription, onManageAccountKeywords, deployedTo, isPending }) => {
+const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicate, onDeploy, onUpdate, callAi, accountName, onSaveKeywords, onDeleteKeywordFromLibrary, customCopywritingPrompt, businessDescription, onManageAccountKeywords, deployedTo, isPending }) => {
     // Component State
     const [modifiedDescription, setModifiedDescription] = useState(product['修改后文案'] || product.result_text_content || '');
     const [isDescriptionDirty, setIsDescriptionDirty] = useState(false);
@@ -99,7 +100,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setImageUrl(product.result_image_url);
         setCardError(null);
         setDeployError(null);
-        setIsDeploying(false);
+            setIsDeploying(false);
         setIsAiToolsExpanded(false);
         setIsEditingModalOpen(false);
         setHasSavedCopy(!!product['修改后文案']);
@@ -107,6 +108,41 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setGeneratedImageUrl(null);
         setIsSavingImage(false);
     }, [product]);
+
+    const handleDeleteKeyword = async (keywordToDelete: string) => {
+        const originalKeywords = [...aiKeywords];
+        const newKeywords = originalKeywords.filter(k => k !== keywordToDelete);
+        
+        // Optimistically update UI
+        setAiKeywords(newKeywords);
+        
+        try {
+            // Update product's own keyword list
+            const updateRes = await fetch(`${databaseUrl}?id=eq.${product.id}`, {
+                method: 'PATCH',
+                headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+                body: JSON.stringify({ "ai提取关键词": newKeywords.join('\n') })
+            });
+            if (!updateRes.ok) {
+                throw new Error(`Failed to update product keywords: ${await updateRes.text()}`);
+            }
+
+            // Call parent to delete from central library
+            await onDeleteKeywordFromLibrary(accountName, keywordToDelete);
+            
+            onUpdate(); // Refresh parent state
+
+        } catch (e) {
+            if (getErrorMessage(e).includes('confirm')) {
+                // User cancelled the action in the confirmation dialog, so no error message is needed
+                setAiKeywords(originalKeywords); // Revert UI
+                return;
+            }
+            setCardError(getErrorMessage(e));
+            // Revert UI on failure
+            setAiKeywords(originalKeywords);
+        }
+    };
 
     const saveImageUrlToProduct = async (url: string) => {
         if (!databaseUrl || !url.trim()) return;
@@ -220,8 +256,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         const inputText = `${customCopywritingPrompt}\n\n[业务描述]:\n${businessDescription}\n\n[商品信息]:\n关键词: ${product.keyword}\n现有文案参考: ${modifiedDescription}`;
         try {
             const aiText = await callAi(inputText);
-            setModifiedDescription(aiText.trim());
-            setIsDescriptionDirty(true);
+                setModifiedDescription(aiText.trim());
+                setIsDescriptionDirty(true);
         } catch (e) { setCardError(getErrorMessage(e)); } finally { setIsLoadingAI(false); }
     };
 
@@ -230,7 +266,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setCardError(null);
         const original_text = product.result_text_content || '';
         const prompt = `
-            请基于以下业务描述和产品文案，提取5-8个最相关的关键词。
+            请基于以下业务描述和产品文案，提取5-8个最相关英文关键词。
             要求：
             1.  每个关键词占一行。
             2.  不要添加任何编号、解释或无关文字。
@@ -245,14 +281,14 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             const keywordsText = await callAi(prompt);
             const keywordsArray = keywordsText.split('\n').map(k => k.trim()).filter(Boolean);
             if (keywordsArray.length > 0) {
-                const updateRes = await fetch(`${databaseUrl}?id=eq.${product.id}`, {
-                    method: 'PATCH',
-                    headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+            const updateRes = await fetch(`${databaseUrl}?id=eq.${product.id}`, {
+                method: 'PATCH',
+                headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
                     body: JSON.stringify({
                         "ai提取关键词": keywordsArray.join('\n'),
                         "keywords_extracted_at": new Date().toISOString()
                     })
-                });
+            });
                 if (!updateRes.ok) throw new Error((await updateRes.json()).message);
                 setAiKeywords(keywordsArray);
                 onUpdate();
@@ -305,7 +341,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             /* Error is handled by the helper */
         }
     };
-
+    
     const handleDeployClick = async () => {
         setIsDeploying(true);
         setDeployError(null);
@@ -338,51 +374,51 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         )}
                     </div>
                 </div>
-                <div className="absolute top-2 right-2 z-10 flex gap-2">
+                 <div className="absolute top-2 right-2 z-10 flex gap-2">
                     <button onClick={() => onDuplicate(product.id)} className="p-1 bg-blue-500 text-white rounded-full hover:bg-blue-700 opacity-50 group-hover:opacity-100 transition-opacity">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                    </button>
+             </button>
                     <button onClick={() => onDelete(product.id)} className="p-1 bg-red-500 text-white rounded-full hover:bg-red-700 opacity-50 group-hover:opacity-100 transition-opacity">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                 </div>
-            </div>
+                </div>
             {imageUrl && !imageUrl.includes('[反爬陷阱图片]') && (
                 <div className="relative w-full h-48">
                     <Image src={imageUrl} alt="商品图片" fill sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw" style={{ objectFit: 'cover' }} className="rounded-md" />
-                </div>
-            )}
+                        </div>
+                    )}
             <div className="flex gap-2">
-                <div className="relative flex-1 group/tooltip">
+                 <div className="relative flex-1 group/tooltip">
                     <button onClick={findSimilarImagesYandex} disabled={!imageUrl} className="w-full text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 py-1 rounded-md disabled:opacity-50">搜图(Yandex)</button>
                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
                         <p className="font-bold border-b pb-1 mb-1">原始文案:</p>
                         <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
                     </div>
                 </div>
-                <div className="relative flex-1 group/tooltip">
+                 <div className="relative flex-1 group/tooltip">
                     <button onClick={findSimilarImagesBing} disabled={!imageUrl} className="w-full text-xs bg-sky-500 hover:bg-sky-600 text-white py-1 rounded-md disabled:opacity-50">搜图(Bing)</button>
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
+                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
                         <p className="font-bold border-b pb-1 mb-1">原始文案:</p>
                         <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
                     </div>
                 </div>
-                <div className="relative flex-1 group/tooltip">
+                 <div className="relative flex-1 group/tooltip">
                     <button onClick={searchOnXianyu} className="w-full text-xs bg-orange-500 hover:bg-orange-600 text-white py-1 rounded-md">搜闲鱼</button>
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
+                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
                         <p className="font-bold border-b pb-1 mb-1">原始文案:</p>
                         <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
                     </div>
                 </div>
-            </div>
+                 </div>
             <div className="flex gap-2">
                 <input value={newImageUrl} onChange={(e) => setNewImageUrl(e.target.value)} placeholder="输入新图片URL..." className="w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600 flex-grow" />
                 <button onClick={updateProductImage} className="text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 px-3 rounded-md">更新</button>
-            </div>
-            <div>
+                </div>
+             <div>
                 <button onClick={() => setIsEditingModalOpen(true)} className="w-full bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-md py-2 px-3 text-sm text-center">
                     查看 / 编辑文案
-                </button>
+                        </button>
             </div>
             <div className="border-2 border-indigo-300 dark:border-indigo-600 mt-3 pt-3 p-3 rounded-lg bg-indigo-50 dark:bg-gray-800/50">
                 <div className="flex justify-between items-center">
@@ -391,32 +427,32 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                 </div>
                 {deployError && <p className="text-xs text-red-500 mt-1">{deployError}</p>}
                 <div className="mt-2">
-                    <button
+                            <button
                         onClick={handleDeployClick}
                         disabled={isDeploying || isDescriptionDirty || isPending || !hasSavedCopy}
                         className="w-full bg-green-500 text-white py-2 rounded-md hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                    >
+                            >
                         {isDeploying ? '投放中...' : (isPending ? '待上架' : '投放到此账号')}
-                    </button>
+                            </button>
                     {isDescriptionDirty && <p className="text-xs text-center text-yellow-600 mt-1">请先保存文案再进行投放</p>}
                     {!isDescriptionDirty && !hasSavedCopy && <p className="text-xs text-center text-red-500 mt-1">必须先保存文案才能投放</p>}
                 </div>
                 <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                    {deployedTo.length > 0 && (
+                     {deployedTo.length > 0 && (
                         <p>已投放到: {deployedTo.join(', ')}</p>
                     )}
                 </div>
-            </div>
+                </div>
             <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
                 <button onClick={() => setIsAiToolsExpanded(!isAiToolsExpanded)} className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center py-1">
                     <span>🤖 AI 工具</span>
                     <span className={`transform transition-transform ${isAiToolsExpanded ? 'rotate-180' : 'rotate-0'}`}>▼</span>
-                </button>
+                 </button>
                 {isAiToolsExpanded && (
                     <div className="mt-2 space-y-3">
                         <div>
                             <div className="flex justify-between items-center">
-                                <label className="text-sm font-bold">AI提取关键词</label>
+                            <label className="text-sm font-bold">AI提取关键词</label>
                                 {product.keywords_extracted_at && (
                                     <span className="text-xs text-gray-400">
                                         上次提取于: {new Date(product.keywords_extracted_at).toLocaleTimeString('zh-CN')}
@@ -426,11 +462,20 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                             <div className="mt-1 p-2 w-full text-xs bg-gray-50 dark:bg-gray-700 rounded-md border dark:border-gray-600 space-y-1 max-h-48 overflow-y-auto">
                                 {aiKeywords.length > 0 ? (
                                     aiKeywords.map((kw, index) => (
-                                        <div key={index} className="flex items-center">
-                                            <input type="checkbox" id={`kw-${product.id}-${index}`} checked={selectedKeywords.has(kw)} onChange={() => handleKeywordToggle(kw)} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
-                                            <label htmlFor={`kw-${product.id}-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-200">
-                                                {kw}
-                                            </label>
+                                        <div key={index} className="flex items-center justify-between group/keyword">
+                                            <div className="flex items-center flex-grow overflow-hidden">
+                                                <input type="checkbox" id={`kw-${product.id}-${index}`} checked={selectedKeywords.has(kw)} onChange={() => handleKeywordToggle(kw)} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 flex-shrink-0" />
+                                                <label htmlFor={`kw-${product.id}-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-200 truncate" title={kw}>
+                                                    {kw}
+                                                </label>
+                                            </div>
+                                            <button
+                                                onClick={() => handleDeleteKeyword(kw)}
+                                                className="ml-2 text-red-500 hover:text-red-700 text-xl opacity-0 group-hover/keyword:opacity-100 transition-opacity flex-shrink-0"
+                                                title={`从该商品和关键词库中删除 '${kw}'`}
+                                            >
+                                                &times;
+                                            </button>
                                         </div>
                                     ))
                                 ) : (
@@ -440,18 +485,18 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                             <div className="flex gap-2 mt-2">
                                 <button onClick={extractKeywordsWithAI} disabled={isLoadingKeywords} className="flex-1 bg-purple-500 hover:bg-purple-600 text-white py-1 px-2 rounded text-sm disabled:opacity-50">
                                     {isLoadingKeywords ? '提取中...' : (product.keywords_extracted_at ? '🤖 重新提取' : '🤖 AI 提取')}
-                                </button>
+                 </button>
                                 <button onClick={handleSaveKeywordsClick} disabled={selectedKeywords.size === 0} className="flex-1 bg-green-500 hover:bg-green-600 text-white py-1 px-2 rounded text-sm disabled:opacity-50">
                                     保存选中 ({selectedKeywords.size})
-                                </button>
+                    </button>
                             </div>
                             <button onClick={onManageAccountKeywords} className="w-full mt-2 bg-teal-500 hover:bg-teal-600 text-white py-1 px-2 rounded text-sm">
                                 管理账号关键词 &rarr;
                             </button>
+                            </div>
                         </div>
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
             {cardError && <p className="text-red-500 text-xs mt-2">{cardError}</p>}
             {isEditingModalOpen && (
                 <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4" onClick={() => setIsEditingModalOpen(false)}>

@@ -350,6 +350,10 @@ export default function AccountsPage() {
     const [editingAccount, setEditingAccount] = useState<Account | null>(null); // State for the account settings modal
     const [editingSchedule, setEditingSchedule] = useState<{ accountName: string; id: string; newTime: string } | null>(null);
     const [timeFilter, setTimeFilter] = useState<string>('all');
+    const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
+    const [analysisResult, setAnalysisResult] = useState('');
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [analysisCount, setAnalysisCount] = useState<number>(10);
     
     // State for Keywords and Prompts
     const [editingKeywords, setEditingKeywords] = useState<{ [key: string]: string }>({});
@@ -750,22 +754,22 @@ export default function AccountsPage() {
         try {
             const aiText = await callAIApiWithFallback(finalPrompt);
 
-            // Post-process the AI output to ensure clean, one-keyword-per-line format
-            const cleanedText = aiText
-                .split('\n') // Split into lines
-                .map((line: string) => 
-                    line
-                        .replace(/\*/g, '') // Forcefully remove all asterisks
-                        .replace(/^\s*\d+\.\s*/, '') // Remove leading numbers like "1. "
-                        .replace(/^\s*[\-]\s*/, '') // Remove leading dashes
-                        .replace(/\s*\(.*\)\s*$/, '') // Remove trailing explanations in parentheses
-                        .trim() // Trim whitespace
-                )
-                // Filter out empty lines and conversational filler
-                .filter((line: string) => line.length > 0 && !/^\s*(好的|根据您|这里是|以下是)/.test(line)) 
-                .join('\n'); // Join them back with newlines
+                 // Post-process the AI output to ensure clean, one-keyword-per-line format
+                const cleanedText = aiText
+                    .split('\n') // Split into lines
+                    .map((line: string) => 
+                        line
+                            .replace(/\*/g, '') // Forcefully remove all asterisks
+                            .replace(/^\s*\d+\.\s*/, '') // Remove leading numbers like "1. "
+                            .replace(/^\s*[\-]\s*/, '') // Remove leading dashes
+                            .replace(/\s*\(.*\)\s*$/, '') // Remove trailing explanations in parentheses
+                            .trim() // Trim whitespace
+                    )
+                    // Filter out empty lines and conversational filler
+                    .filter((line: string) => line.length > 0 && !/^\s*(好的|根据您|这里是|以下是)/.test(line)) 
+                    .join('\n'); // Join them back with newlines
 
-            setEditingKeywords(prev => ({ ...prev, [accountName]: cleanedText }));
+                setEditingKeywords(prev => ({ ...prev, [accountName]: cleanedText }));
         } catch (e: unknown) {
             alert(`关键词生成失败: ${getErrorMessage(e)}`);
         } finally {
@@ -1048,7 +1052,7 @@ export default function AccountsPage() {
             alert('错误：没有选中的账号。');
             return;
         }
-
+        
         const account = allAccounts.find(acc => acc.name === selectedAccountForProducts.name);
         if (!account) {
             alert('错误：找不到当前账号的数据。');
@@ -1067,7 +1071,7 @@ export default function AccountsPage() {
             const original_text = productToDeploy.result_text_content || '';
             const businessDescription = account['业务描述'] || '';
             const prompt = `
-                请基于以下业务描述和产品文案，提取5-8个最相关的关键词。
+                请基于以下业务描述和产品文案，提取5-8个最相关的英文关键词。
                 要求：
                 1.  每个关键词占一行。
                 2.  不要添加任何编号、解释或无关文字。
@@ -1336,6 +1340,84 @@ export default function AccountsPage() {
         }
     }, [fetchAccounts, selectedAccountForProducts, fetchProductsForAccount]);
 
+    const handleAnalyzeTopProducts = async () => {
+        if (analysisCount <= 0 || !selectedAccountForProducts) return;
+
+        setIsAnalyzing(true);
+        setAnalysisResult('');
+        
+        const productsToAnalyze = products.slice(0, analysisCount);
+        
+        if (productsToAnalyze.length === 0) {
+            setAnalysisResult("没有足够的商品进行分析。");
+            setIsAnalyzing(false);
+            return;
+        }
+
+        const productInfo = productsToAnalyze.map((p, i) => `
+--- Product ${i + 1} (ID: ${p.id}) ---
+Keywords: ${p.keyword || 'N/A'}
+AI Extracted Keywords: ${(p.ai提取关键词 || '').replace(/\n/g, ', ')}
+Content:
+${p.result_text_content || ''}
+        `).join('\n');
+
+        const prompt = `
+You are a senior business analyst tasked with providing strategic insights.
+Based on the provided business description and a batch of the latest ${productsToAnalyze.length} products for this account, please perform a comprehensive analysis.
+
+--- Business Context ---
+Account Name: ${selectedAccountForProducts.name}
+Core Business Description:
+${selectedAccountForProducts['业务描述']}
+
+--- Selected Products Data ---
+${productInfo}
+
+--- Analysis Task ---
+Please provide a report with the following structure:
+1.  **产品共性总结 (Product Commonality Summary):** Identify the common themes, categories, or features shared across these products. What kind of product group is this?
+2.  **核心需求与痛点 (Core Needs & Pain Points):** Based on the products, infer the primary needs and pain points of the target customer. What problem are they trying to solve?
+3.  **营销策略建议 (Marketing Strategy Suggestions):** Suggest 2-3 potential marketing angles or sales strategies. How can we position these products to resonate with the target audience? What kind of promotional language would be effective?
+4.  **结论 (Conclusion):** Provide a brief, actionable summary of your findings.
+
+Please format your response clearly in Chinese.
+`;
+
+        try {
+            const result = await callAIApiWithFallback(prompt);
+            setAnalysisResult(result);
+        } catch (e) {
+            setAnalysisResult(`分析失败: ${getErrorMessage(e)}`);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
+    const handleDeleteKeywordFromLibrary = async (accountName: string, keywordToDelete: string) => {
+        const confirmed = window.confirm(`您确定要从账号 [${accountName}] 的【核心关键词库】中永久删除关键词 "${keywordToDelete}" 吗？\n\n此操作也会影响所有使用此关键词的AI功能。`);
+        if (!confirmed) {
+            // Throw a specific error to be caught in the child component to revert UI state
+            throw new Error('User cancelled via confirm dialog');
+        }
+
+        try {
+            const { error } = await supabase
+                .from('important_keywords_本人')
+                .delete()
+                .eq('account_name', accountName)
+                .eq('keyword', keywordToDelete);
+            
+            if (error) throw error;
+            
+            alert(`已成功从 ${accountName} 的关键词库中删除 "${keywordToDelete}"。`);
+            await fetchAccounts(); // Refresh accounts to update keyword lists everywhere
+        } catch (e) {
+            console.error('Failed to delete keyword from library:', getErrorMessage(e));
+            alert(`从关键词库删除失败: ${getErrorMessage(e)}`);
+            throw e; // Re-throw to ensure calling components can handle it
+        }
+    };
 
     // --- RENDER LOGIC ---
 
@@ -1430,101 +1512,202 @@ export default function AccountsPage() {
     if (selectedAccountForProducts) {
   return (
             <div className="p-5 font-sans bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
-                <div className="flex items-center gap-4 mb-4">
-                <button
-                        onClick={handleBackToAccounts}
-                        className="bg-gray-500 hover:bg-gray-600 text-white text-sm py-1.5 px-4 rounded-md cursor-pointer"
-                >
-                        ← 返回账户列表
-                </button>
-                    <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">
-                        <span className="font-normal">账号: </span>
-                        {selectedAccountForProducts.name}
-                    </h1>
-                     <div className="ml-auto flex items-center gap-4">
-                        <span className="text-sm font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 py-1 px-3 rounded-full">
-                            今日获取: {products.filter(p => new Date(p.created_at) >= new Date(new Date().setHours(0, 0, 0, 0))).length} 个商品
-                        </span>
-                        <select
-                            value={timeFilter}
-                            onChange={(e) => setTimeFilter(e.target.value)}
-                            className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm py-1.5 px-3 text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                {/* Modal for AI Analysis */}
+                {isAnalysisModalOpen && (
+                    <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4" onClick={() => setIsAnalysisModalOpen(false)}>
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-xl font-bold">🤖 批量商品AI分析</h2>
+                                <button onClick={() => setIsAnalysisModalOpen(false)} className="text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100 text-2xl font-bold">&times;</button>
+                            </div>
+                            
+                            <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-4 overflow-y-auto pr-2">
+                                {/* Left side: Info */}
+                                <div className="space-y-4">
+                                    <div>
+                                        <h3 className="font-semibold text-lg">分析目标账号</h3>
+                                        <p className="text-blue-600 dark:text-blue-400">{selectedAccountForProducts.name}</p>
+                                    </div>
+                                     <div>
+                                        <h3 className="font-semibold text-lg">核心业务描述</h3>
+                                        <p className="text-sm bg-gray-100 dark:bg-gray-700 p-2 rounded">{selectedAccountForProducts['业务描述']}</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-semibold text-lg">分析范围</h3>
+                                         <p className="text-xs text-gray-500 mb-2">输入要分析的最新商品数量。</p>
+                                        <input
+                                            type="number"
+                                            value={analysisCount}
+                                            onChange={(e) => setAnalysisCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                                            className="w-full p-2 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600"
+                                            placeholder="例如: 10"
+                                        />
+                                    </div>
+                                </div>
+                                {/* Right side: Result */}
+                                <div>
+                                    <h3 className="font-semibold text-lg">AI 分析报告</h3>
+                                    <div className="mt-1 w-full p-3 border rounded bg-gray-50 dark:bg-gray-900 h-full min-h-[300px] whitespace-pre-wrap overflow-y-auto">
+                                        {isAnalyzing ? (
+                                            <div className="flex items-center justify-center h-full">
+                                                <p className="text-lg animate-pulse">分析中，请稍候...</p>
+                                            </div>
+                                        ) : (
+                                            analysisResult || "点击开始分析以生成报告。"
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mt-4 pt-4 border-t flex justify-end">
+                                <button
+                                    onClick={handleAnalyzeTopProducts}
+                                    disabled={isAnalyzing || analysisCount <= 0}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50"
+                                >
+                                    {isAnalyzing ? '分析中...' : `🚀 分析最新的 ${analysisCount} 项`}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                <div className="mb-8">
+                    {/* Top row: Navigation and Title */}
+                    <div className="flex justify-between items-center mb-4">
+                        <div className="flex items-center gap-4">
+                            <button
+                                onClick={handleBackToAccounts}
+                                className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-colors"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                                返回
+                            </button>
+                            <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-200 tracking-tight">
+                                {selectedAccountForProducts.name}
+                            </h1>
+                        </div>
+                        <button
+                            onClick={() => setIsAnalysisModalOpen(true)}
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-transform hover:scale-105"
                         >
-                            <option value="all">全部时间</option>
-                            <option value="today">今天</option>
-                            <option value="yesterday">昨天</option>
-                            <option value="week">一周内</option>
-                        </select>
+                            <span className="text-lg">🤖</span>
+                            AI 业务分析
+                        </button>
+                    </div>
+
+                    {/* Bottom row: Control Panel / Dashboard */}
+                    <div className="p-4 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-gray-200 dark:border-gray-700/50 shadow-sm">
+                        <div className="flex justify-between items-start gap-6">
+                            {/* Left side: Business Info */}
+                            <div className="flex-grow max-w-prose">
+                                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400">核心业务</h3>
+                                <p className="text-base text-gray-800 dark:text-gray-200 mt-1 whitespace-pre-wrap">
+                                    {selectedAccountForProducts['业务描述'] || '暂无描述'}
+                                </p>
+                                <button
+                                    onClick={() => handleAccountSelectForKeywords(selectedAccountForProducts!)}
+                                    className="mt-3 text-sm font-semibold text-teal-600 hover:text-teal-500 dark:text-teal-400 dark:hover:text-teal-300 transition-colors"
+                                 >
+                                    管理核心关键词 &rarr;
+                                </button>
+                            </div>
+
+                            {/* Right side: Filters & Stats */}
+                            <div className="flex-shrink-0 flex items-center gap-4 pt-1">
+                                <span className="text-sm font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 py-1.5 px-3 rounded-full">
+                                    今日获取: {products.filter(p => new Date(p.created_at) >= new Date(new Date().setHours(0, 0, 0, 0))).length} 个
+                                </span>
+                                <select
+                                    value={timeFilter}
+                                    onChange={(e) => setTimeFilter(e.target.value)}
+                                    className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm py-1.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                                >
+                                    <option value="all">全部时间</option>
+                                    <option value="today">今天</option>
+                                    <option value="yesterday">昨天</option>
+                                    <option value="week">一周内</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 {/* Global prompt section is removed */}
-
-                <hr className="my-6 border-gray-300 dark:border-gray-600" />
                 
                 <h2 className="text-xl font-semibold mb-3">商品列表</h2>
                 {loadingProducts && <p className="text-gray-600 dark:text-gray-400 italic">正在加载商品...</p>}
                 {errorProducts && <p className="text-red-600 dark:text-red-400">{errorProducts}</p>}
 
-                {!loadingProducts && !errorProducts && (
-                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                        {products.filter(product => {
-                            if (timeFilter === 'all') return true;
-                            const productDate = new Date(product.created_at);
-                            const today = new Date();
-                            const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                            
-                            if (timeFilter === 'today') {
-                                return productDate >= startOfToday;
-                            }
-                            
-                            if (timeFilter === 'yesterday') {
-                                const startOfYesterday = new Date(startOfToday);
-                                startOfYesterday.setDate(startOfYesterday.getDate() - 1);
-                                return productDate >= startOfYesterday && productDate < startOfToday;
-                            }
+                {!loadingProducts && !errorProducts && selectedAccountForProducts && (() => {
+                    // Create a non-nullable reference to the account within this scope to satisfy the type checker
+                    const currentAccount = selectedAccountForProducts;
+                    return (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                            {products.filter(product => {
+                                if (timeFilter === 'all') return true;
+                                const productDate = new Date(product.created_at);
+                                const today = new Date();
+                                const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                                
+                                if (timeFilter === 'today') {
+                                    return productDate >= startOfToday;
+                                }
+                                
+                                if (timeFilter === 'yesterday') {
+                                    const startOfYesterday = new Date(startOfToday);
+                                    startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+                                    return productDate >= startOfYesterday && productDate < startOfToday;
+                                }
 
-                            if (timeFilter === 'week') {
-                                const startOfWeek = new Date(startOfToday);
-                                startOfWeek.setDate(startOfWeek.getDate() - 7);
-                                return productDate >= startOfWeek;
-                            }
-                            return true;
-                        }).map(product => {
-                            const deployedTo = productSchedules
-                                .filter(s => s.product_id === product.id)
-                                .map(s => s.account_name);
-                            const isPending = selectedAccountForProducts?.['待上架']?.some(item => {
-                                const id = typeof item === 'object' && item !== null ? (item as ScheduledProduct).id : item;
-                                return String(id) === String(product.id);
-                            }) ?? false;
-                            return (
-                                <ProductCard 
-                                    key={product.id} 
-                                    product={product} 
-                                    onDelete={handleDeleteProduct} 
-                                    onDuplicate={handleDuplicateProduct}
-                                    onDeploy={handleDeployProduct}
-                                    onUpdate={handleProductUpdate}
-                                    callAi={callAIApiWithFallback}
-                                    accountName={selectedAccountForProducts.name}
-                                    onSaveKeywords={handleSaveKeywordsToAccount}
-                                    customCopywritingPrompt={selectedAccountForProducts?.['文案生成prompt'] || ''} 
-                                    businessDescription={selectedAccountForProducts?.['业务描述'] || ''}
-                                    onManageAccountKeywords={() => handleAccountSelectForKeywords(selectedAccountForProducts!)}
-                                    deployedTo={deployedTo} 
-                                    isPending={isPending}
-                                />
-                            );
-                        })}
-                </div>
-                )}
-                 {!loadingProducts && !errorProducts && products.length === 0 && (
+                                if (timeFilter === 'week') {
+                                    const startOfWeek = new Date(startOfToday);
+                                    startOfWeek.setDate(startOfWeek.getDate() - 7);
+                                    return productDate >= startOfWeek;
+                                }
+                                return true;
+                            }).map(product => {
+                                const deployedTo = productSchedules
+                                    .filter(s => s.product_id === product.id)
+                                    .map(s => s.account_name);
+                                const isPending = currentAccount['待上架']?.some(item => {
+                                    const id = typeof item === 'object' && item !== null ? (item as ScheduledProduct).id : item;
+                                    return String(id) === String(product.id);
+                                }) ?? false;
+                                return (
+                                    <div className="relative" key={product.id}>
+                                        <ProductCard 
+                                            product={product} 
+                                            onDelete={handleDeleteProduct} 
+                                            onDuplicate={handleDuplicateProduct}
+                                            onDeploy={handleDeployProduct}
+                                            onUpdate={handleProductUpdate}
+                                            callAi={callAIApiWithFallback}
+                                            accountName={currentAccount.name}
+                                            onSaveKeywords={handleSaveKeywordsToAccount}
+                                            onDeleteKeywordFromLibrary={handleDeleteKeywordFromLibrary}
+                                            customCopywritingPrompt={currentAccount['文案生成prompt'] || ''} 
+                                            businessDescription={currentAccount['业务描述'] || ''}
+                                            onManageAccountKeywords={() => {
+                                                if (currentAccount) {
+                                                    handleAccountSelectForKeywords(currentAccount);
+                                                }
+                                            }}
+                                            deployedTo={deployedTo} 
+                                            isPending={isPending}
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    );
+                })()}
+
+                {!loadingProducts && !errorProducts && products.length === 0 && (
                     <div className="text-center col-span-full p-5 text-gray-500 dark:text-gray-400">
                         该账号下没有找到任何商品。
-                                    </div>
+                    </div>
                 )}
-                                </div>
+            </div>
         );
     }
 
@@ -1554,17 +1737,17 @@ export default function AccountsPage() {
                         const today = new Date();
                         const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
                         return (
-                            <div key={account.name}
-                                 onClick={() => handleAccountSelectForProducts(account)}
-                                 className="border border-gray-200 dark:border-gray-700 p-4 rounded-lg bg-white dark:bg-gray-800 shadow-md relative group/account flex flex-col gap-3 cursor-pointer hover:border-blue-500 dark:hover:border-blue-400 transition-colors"
-                            >
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); handleDeleteAccount(account.name); }}
-                                    disabled={deletingAccount === account.name}
-                                    className="absolute top-2 right-2 p-1 bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-800/70 rounded-full opacity-0 group-hover/account:opacity-100 z-10"
-                                >
-                                    {deletingAccount === account.name ? "..." : "✕"}
-                                </button>
+                        <div key={account.name}
+                             onClick={() => handleAccountSelectForProducts(account)}
+                             className="border border-gray-200 dark:border-gray-700 p-4 rounded-lg bg-white dark:bg-gray-800 shadow-md relative group/account flex flex-col gap-3 cursor-pointer hover:border-blue-500 dark:hover:border-blue-400 transition-colors"
+                        >
+                <button
+                                onClick={(e) => { e.stopPropagation(); handleDeleteAccount(account.name); }}
+                                disabled={deletingAccount === account.name}
+                                className="absolute top-2 right-2 p-1 bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-800/70 rounded-full opacity-0 group-hover/account:opacity-100 z-10"
+                >
+                                {deletingAccount === account.name ? "..." : "✕"}
+                </button>
                                 <div className="flex items-center gap-3 border-b pb-2 pr-8">
                                     {account['xhs_头像'] ? (
                                         <div className="relative w-12 h-12 rounded-full overflow-hidden border-2 border-pink-400">
@@ -1589,8 +1772,8 @@ export default function AccountsPage() {
                                     </div>
                                 </div>
                                  <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400 mt-2">
-                                    <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
-                                    <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
+                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
+                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
                                     <div className="mt-2 flex flex-wrap gap-2">
                                         <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
                                             今日新增商品: {account.today_new_products}
@@ -1601,49 +1784,49 @@ export default function AccountsPage() {
                                         </span>
                                     )}
                                     </div>
-                    </div>
+                </div>
 
                                 <div className="flex flex-col gap-3 mt-2 border-t pt-3">
                                     <div>
-                                        <TagList 
-                                            title="今日上架计划" 
-                                            items={account.todays_schedule || []} 
-                                            color="blue" 
-                                            accountName={account.name}
-                                            arrayKey='待上架'
+                                    <TagList 
+                                        title="今日上架计划" 
+                                        items={account.todays_schedule || []} 
+                                        color="blue" 
+                                        accountName={account.name}
+                                        arrayKey='待上架'
                                             onDeleteItem={handleDeleteItemFromArray}
-                                            layout="vertical"
+                                        layout="vertical"
                                             deployedIds={(account['已上架json'] || []).map(item => item.id)}
                                             editingSchedule={editingSchedule}
                                             setEditingSchedule={setEditingSchedule}
                                             onUpdateTime={handleUpdateScheduleTime}
-                                        />
-                                    </div>
+                                    />
+                                </div>
                                     <div>
-                                        <TagList 
+                                    <TagList 
                                             title="已上架" 
                                             items={account['已上架']} 
                                             color="green" 
-                                            accountName={account.name}
+                                        accountName={account.name}
                                             arrayKey='已上架'
-                                            onDeleteItem={handleDeleteItemFromArray}
-                                        />
+                                        onDeleteItem={handleDeleteItemFromArray}
+                                    />
                                     </div>
-                                </div>
+                            </div>
 
-                                <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
-                       <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setEditingAccount(account);
-                                        }}
-                                        className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center"
-                                    >
-                                        <span>高级设置</span>
-                                        <span>⚙️</span>
-                        </button>
-                    </div>
+                            <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
+                   <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingAccount(account);
+                                    }}
+                                    className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center"
+                                >
+                                    <span>高级设置</span>
+                                    <span>⚙️</span>
+                    </button>
                 </div>
+            </div>
                         )
                     })}
                 </div>
@@ -1831,7 +2014,7 @@ export default function AccountsPage() {
                                         >
                                             保存
                                         </button>
-            </div>
+                            </div>
                                    <div>
                                         <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 block mb-1">闲鱼账号</label>
                                         <input
