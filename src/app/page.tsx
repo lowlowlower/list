@@ -1545,16 +1545,16 @@ Please format your response clearly in Chinese.
         setIsAiAddingAccounts(true);
 
         const prompt = `
-You are an AI assistant that generates account data based on user requests. Your task is to understand the user's request for generating multiple accounts and then return ONLY a valid JSON array of objects representing those accounts.
+You are an AI assistant that generates high-end, professional account data based on user requests. Your task is to understand the user's request and then return ONLY a valid JSON array of objects representing those accounts.
 
 Each object in the array must have the following keys: "name", "xhs_account", "xianyu_account", "phone_model", "business_description", "english_keywords".
 
-- **name**: The account name you generate. This is mandatory.
-- **business_description**: A professional **Chinese** description for the account's purpose. This is very important and must be generated based on the account's theme.
+- **name**: A professional **English** account name. This is mandatory.
+- **business_description**: This is the most important part. It must be a professional description containing two paragraphs: the first in **English**, and the second a **Chinese translation/summary** of the English part. Both should describe the account's purpose based on its theme.
 - **english_keywords**: An array of exactly 10 relevant **English** keywords for the account. This is mandatory.
-- **xhs_account**: The XHS account. If the user asks for it to be the same as the name, use the name. Otherwise, generate a suitable one or leave it empty.
+- **xhs_account**: The XHS account. If the user asks for it to be the same as the name, use the English name. Otherwise, leave it empty.
 - **xianyu_account**: The Xianyu account, similar rules to xhs_account.
-- **phone_model**: Usually leave this as an empty string "" unless specified by the user.
+- **phone_model**: Leave this as an empty string "" unless specified by the user.
 
 Follow the user's instructions regarding topic, quantity, and naming conventions precisely.
 Do NOT return any text, explanation, or markdown formatting around the JSON array. Your entire response must be the JSON array itself.
@@ -2098,7 +2098,7 @@ ${aiBatchInput}
                                                             title="拖拽排序"
                                                         >
                                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                                              <path d="M5 4a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2z" />
+                                                              <path d="M5 4a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2z" />
                                                             </svg>
                                                         </div>
                                                         <div className="flex-grow">
@@ -2278,7 +2278,7 @@ ${aiBatchInput}
                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                              请在下方文本框中输入或粘贴您的账号信息。AI将尝试自动解析并批量创建它们。
                              <br />
-                             例如: <code className="text-xs bg-gray-200 dark:bg-gray-700 p-1 rounded">&quot;生成10个计算机科学专业的账号，账号名与社交账号一致&quot;</code>
+                             例如: <code className="text-xs bg-gray-200 dark:bg-gray-700 p-1 rounded">&quot;生成10个市场营销方向的高端英文账号，业务描述需要中英文&quot;</code>
                          </p>
                          <textarea
                             value={aiBatchInput}

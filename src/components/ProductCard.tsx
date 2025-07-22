@@ -88,7 +88,9 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
     const [isGeneratingImage, setIsGeneratingImage] = useState(false);
     const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null); // This will hold the base64 data URL
     const [isSavingImage, setIsSavingImage] = useState(false);
-    const [isFindingImage, setIsFindingImage] = useState(false);
+    const [isSuggestingKeyword, setIsSuggestingKeyword] = useState(false);
+    const [isSearchingImage, setIsSearchingImage] = useState(false);
+    const [imageSearchKeyword, setImageSearchKeyword] = useState('');
     const originalTextareaRef = useRef<HTMLTextAreaElement>(null);
     const modifiedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -108,7 +110,9 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setIsGeneratingImage(false);
         setGeneratedImageUrl(null);
         setIsSavingImage(false);
-        setIsFindingImage(false);
+        setImageSearchKeyword('');
+        setIsSuggestingKeyword(false);
+        setIsSearchingImage(false);
     }, [product]);
 
     const handleDeleteKeyword = async (keywordToDelete: string) => {
@@ -145,6 +149,82 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             setAiKeywords(originalKeywords);
         }
     };
+
+    const handleAiSuggestKeyword = async () => {
+        setIsSuggestingKeyword(true);
+        setCardError(null);
+        try {
+            const keywordPrompt = `
+                Based on the following product description, what is the single best English keyword for finding a representative stock photo?
+                Return ONLY the single keyword, with no explanation or extra text.
+                Description:
+                ---
+                ${modifiedDescription}
+                ---
+            `;
+            const keyword = await callAi(keywordPrompt);
+            if (!keyword.trim()) {
+                throw new Error("AI did not suggest a keyword.");
+            }
+            setImageSearchKeyword(keyword.trim());
+        } catch (e) {
+            setCardError(getErrorMessage(e));
+        } finally {
+            setIsSuggestingKeyword(false);
+        }
+    };
+
+    const handleSearchImageWithKeyword = async () => {
+        if (!imageSearchKeyword.trim()) {
+            setCardError("Please provide a keyword to search for an image.");
+            return;
+        }
+        setIsSearchingImage(true);
+        setCardError(null);
+        try {
+            // Call our backend API to get an image URL
+            const response = await fetch('/api/find-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ keyword: imageSearchKeyword.trim() })
+            });
+
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.error || 'Failed to find image.');
+            }
+
+            // Save the new URL to the product
+            await saveImageUrlToProduct(result.imageUrl);
+            // The card will be updated automatically via onUpdate() triggered by saveImageUrlToProduct
+
+        } catch (e) {
+            setCardError(getErrorMessage(e));
+        } finally {
+            setIsSearchingImage(false);
+        }
+    };
+
+    const handleExternalSearch = (engine: 'yandex' | 'bing') => {
+        if (imageSearchKeyword.trim()) {
+            // Keyword search
+            const query = encodeURIComponent(imageSearchKeyword.trim());
+            if (engine === 'yandex') {
+                window.open(`https://yandex.com/images/search?text=${query}`, '_blank');
+            } else {
+                window.open(`https://www.bing.com/images/search?q=${query}`, '_blank');
+            }
+        } else if (imageUrl) {
+            // Reverse image search
+            const url = encodeURIComponent(imageUrl);
+            if (engine === 'yandex') {
+                window.open(`https://yandex.com/images/search?rpt=imageview&url=${url}`, '_blank');
+            } else {
+                window.open(`https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:${url}`, '_blank');
+            }
+        }
+    };
+
 
     const saveImageUrlToProduct = async (url: string) => {
         if (!databaseUrl || !url.trim()) return;
@@ -248,47 +328,6 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             setCardError(getErrorMessage(e));
         } finally {
             setIsSavingImage(false);
-        }
-    };
-
-    const handleAiFindImage = async () => {
-        setIsFindingImage(true);
-        setCardError(null);
-        try {
-            // 1. Get the best keyword from AI
-            const keywordPrompt = `
-                Based on the following product description, what is the single best English keyword for finding a representative stock photo?
-                Return ONLY the single keyword, with no explanation or extra text.
-                Description:
-                ---
-                ${modifiedDescription}
-                ---
-            `;
-            const keyword = await callAi(keywordPrompt);
-            if (!keyword.trim()) {
-                throw new Error("AI did not return a keyword.");
-            }
-
-            // 2. Call our backend API to get an image URL
-            const response = await fetch('/api/find-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ keyword: keyword.trim() })
-            });
-
-            const result = await response.json();
-            if (!response.ok) {
-                throw new Error(result.error || 'Failed to find image.');
-            }
-
-            // 3. Save the new URL to the product
-            await saveImageUrlToProduct(result.imageUrl);
-            // The card will be updated automatically via onUpdate() triggered by saveImageUrlToProduct
-
-        } catch (e) {
-            setCardError(getErrorMessage(e));
-        } finally {
-            setIsFindingImage(false);
         }
     };
 
@@ -398,8 +437,6 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
     };
 
     const searchOnXianyu = () => { const q = (product.result_text_content || '').substring(0, 40).trim(); if (q) window.open(`https://www.goofish.com/search?q=${encodeURIComponent(q)}`, '_blank'); };
-    const findSimilarImagesYandex = () => { if (imageUrl) window.open(`https://yandex.com/images/search?rpt=imageview&url=${encodeURIComponent(imageUrl)}`, '_blank'); };
-    const findSimilarImagesBing = () => { if (imageUrl) window.open(`https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:${encodeURIComponent(imageUrl)}`, '_blank'); };
 
     return (
         <article className="product-card border border-gray-300 dark:border-gray-700 rounded-lg shadow-md bg-white dark:bg-gray-800 flex flex-col gap-3 p-4 relative group">
@@ -441,17 +478,17 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
 
             <div className="flex gap-2">
                  <div className="relative flex-1 group/tooltip">
-                    <button onClick={findSimilarImagesYandex} disabled={!imageUrl} className="w-full text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 py-1 rounded-md disabled:opacity-50">搜图(Yandex)</button>
+                    <button onClick={() => handleExternalSearch('yandex')} disabled={!imageUrl && !imageSearchKeyword.trim()} className="w-full text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 py-1 rounded-md disabled:opacity-50">搜图(Yandex)</button>
                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
-                        <p className="font-bold border-b pb-1 mb-1">原始文案:</p>
-                        <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
+                        <p className="font-bold border-b pb-1 mb-1">提示:</p>
+                        <p className="whitespace-pre-wrap">如果下方输入框有关键词，将使用关键词搜索；否则使用当前图片进行反向搜图。</p>
                     </div>
                 </div>
                  <div className="relative flex-1 group/tooltip">
-                    <button onClick={findSimilarImagesBing} disabled={!imageUrl} className="w-full text-xs bg-sky-500 hover:bg-sky-600 text-white py-1 rounded-md disabled:opacity-50">搜图(Bing)</button>
+                    <button onClick={() => handleExternalSearch('bing')} disabled={!imageUrl && !imageSearchKeyword.trim()} className="w-full text-xs bg-sky-500 hover:bg-sky-600 text-white py-1 rounded-md disabled:opacity-50">搜图(Bing)</button>
                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
-                        <p className="font-bold border-b pb-1 mb-1">原始文案:</p>
-                        <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
+                        <p className="font-bold border-b pb-1 mb-1">提示:</p>
+                        <p className="whitespace-pre-wrap">如果下方输入框有关键词，将使用关键词搜索；否则使用当前图片进行反向搜图。</p>
                     </div>
                 </div>
                  <div className="relative flex-1 group/tooltip">
@@ -462,18 +499,43 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                     </div>
                 </div>
                  </div>
-            <div className="flex gap-2">
-                <input value={newImageUrl} onChange={(e) => setNewImageUrl(e.target.value)} placeholder="输入新图片URL..." className="w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600 flex-grow" />
-                <button onClick={updateProductImage} className="text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 px-3 rounded-md">更新</button>
-                <button
-                    onClick={handleAiFindImage}
-                    disabled={isFindingImage}
-                    className="text-xs bg-purple-500 hover:bg-purple-600 text-white px-3 rounded-md disabled:opacity-50 flex-shrink-0"
-                    title="让AI根据文案寻找一张最匹配的图片并自动更新"
-                >
-                    {isFindingImage ? '寻找中...' : '🤖 AI找图'}
-                </button>
+            <div className="space-y-2 mt-2">
+                <div className="p-2 border rounded-md bg-gray-50 dark:bg-gray-800">
+                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">智能图片搜索</label>
+                    <div className="grid grid-cols-3 gap-2 mt-1">
+                        <input
+                            value={imageSearchKeyword}
+                            onChange={(e) => setImageSearchKeyword(e.target.value)}
+                            placeholder="图片关键词 (英文)"
+                            className="col-span-3 w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600"
+                        />
+                        <button
+                            onClick={handleAiSuggestKeyword}
+                            disabled={isSuggestingKeyword || isSearchingImage}
+                            className="text-xs bg-purple-500 hover:bg-purple-600 text-white px-2 py-1.5 rounded-md disabled:opacity-50"
+                            title="让AI根据文案建议一个搜索关键词"
+                        >
+                            {isSuggestingKeyword ? '提词中...' : '🤖 AI提词'}
+                        </button>
+                        <button
+                            onClick={handleSearchImageWithKeyword}
+                            disabled={isSearchingImage || isSuggestingKeyword || !imageSearchKeyword.trim()}
+                            className="col-span-2 text-xs bg-blue-500 hover:bg-blue-600 text-white px-2 py-1.5 rounded-md disabled:opacity-50"
+                            title="使用上方关键词搜索图片并更新"
+                        >
+                            {isSearchingImage ? '搜索中...' : '🔍 搜索并更新图片'}
+                        </button>
+                    </div>
+                </div>
+                 <div className="p-2 border rounded-md bg-gray-50 dark:bg-gray-800">
+                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">手动更新图片</label>
+                    <div className="flex gap-2 mt-1">
+                        <input value={newImageUrl} onChange={(e) => setNewImageUrl(e.target.value)} placeholder="输入新图片URL..." className="w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600 flex-grow" />
+                        <button onClick={updateProductImage} className="text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 px-3 rounded-md flex-shrink-0">更新</button>
+                    </div>
+                </div>
             </div>
+
              <div>
                 <button onClick={() => setIsEditingModalOpen(true)} className="w-full bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-md py-2 px-3 text-sm text-center">
                     查看 / 编辑文案
