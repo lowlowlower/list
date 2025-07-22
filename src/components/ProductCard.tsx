@@ -83,6 +83,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
     const [isDeploying, setIsDeploying] = useState(false);
     const [deployError, setDeployError] = useState<string | null>(null);
     const [isEditingModalOpen, setIsEditingModalOpen] = useState(false); // For the new editing modal
+    const [hasSavedCopy, setHasSavedCopy] = useState(!!product['修改后文案']);
+    const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+    const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null); // This will hold the base64 data URL
+    const [isSavingImage, setIsSavingImage] = useState(false);
     const originalTextareaRef = useRef<HTMLTextAreaElement>(null);
     const modifiedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -98,7 +102,30 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setIsDeploying(false);
         setIsAiToolsExpanded(false);
         setIsEditingModalOpen(false);
+        setHasSavedCopy(!!product['修改后文案']);
+        setIsGeneratingImage(false);
+        setGeneratedImageUrl(null);
+        setIsSavingImage(false);
     }, [product]);
+
+    const saveImageUrlToProduct = async (url: string) => {
+        if (!databaseUrl || !url.trim()) return;
+        setCardError(null);
+        try {
+            const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, {
+                method: 'PATCH',
+                headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+                body: JSON.stringify({ 'result_image_url': url.trim() })
+            });
+            if (!res.ok) throw new Error((await res.json()).message);
+            setImageUrl(url.trim()); // Update local image state immediately
+            setNewImageUrl(''); // Clear the input
+            onUpdate(); // Trigger parent refresh
+        } catch (e) {
+            setCardError(getErrorMessage(e));
+            throw e; // Re-throw to be caught by the calling function
+        }
+    };
 
     // Autosize Textarea Logic
     const autoResizeTextarea = (element: HTMLTextAreaElement | null) => {
@@ -120,6 +147,70 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setModifiedDescription(e.target.value);
         setIsDescriptionDirty(true);
         autoResizeTextarea(e.target);
+    };
+
+    const handleGenerateImage = async () => {
+        if (!modifiedDescription.trim()) {
+            setCardError("文案为空，无法生成图片。");
+            return;
+        }
+        setIsGeneratingImage(true);
+        setGeneratedImageUrl(null);
+        setCardError(null);
+
+        try {
+            const response = await fetch('/api/generate-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: modifiedDescription })
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.error || '生成图片失败');
+            }
+
+            // The API now returns a base64 data URL for preview
+            setGeneratedImageUrl(result.imageUrl);
+
+        } catch (e) {
+            setCardError(getErrorMessage(e));
+        } finally {
+            setIsGeneratingImage(false);
+        }
+    };
+
+    const handleSaveGeneratedImage = async () => {
+        if (!generatedImageUrl || !generatedImageUrl.startsWith('data:image/png;base64,')) {
+            setCardError("没有可保存的预览图片。");
+            return;
+        }
+        setIsSavingImage(true);
+        setCardError(null);
+        try {
+            // Step 1: Upload the image data to get the permanent URL
+            const response = await fetch('/api/save-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ imageDataUrl: generatedImageUrl })
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.error || '图片保存失败');
+            }
+
+            // Step 2: Save the new URL to the product and refresh the UI
+            await saveImageUrlToProduct(result.supabaseUrl);
+            
+            setCardError("图片已成功保存并更新！");
+            setGeneratedImageUrl(null); // Clear the preview
+        } catch (e) {
+            // Error will be set by saveImageUrlToProduct or caught here
+            setCardError(getErrorMessage(e));
+        } finally {
+            setIsSavingImage(false);
+        }
     };
 
     const modifyTextWithAI = async () => {
@@ -200,7 +291,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify({ "修改后文案": modifiedDescription }) });
             if (!res.ok) throw new Error((await res.json()).message);
             setIsDescriptionDirty(false);
-            onUpdate();
+            setHasSavedCopy(true); // Manually update save state
             setIsEditingModalOpen(false);
         } catch (e) { setCardError(getErrorMessage(e)); } finally { setIsLoadingConfirm(false); }
     };
@@ -209,12 +300,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         if (!databaseUrl || !newImageUrl.trim()) return;
         setCardError(null);
         try {
-            const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify({ 'result_image_url': newImageUrl.trim() }) });
-            if (!res.ok) throw new Error((await res.json()).message);
-            setImageUrl(newImageUrl.trim());
-            setNewImageUrl('');
-            onUpdate();
-        } catch (e) { setCardError(getErrorMessage(e)); }
+            await saveImageUrlToProduct(newImageUrl.trim());
+        } catch { 
+            /* Error is handled by the helper */
+        }
     };
 
     const handleDeployClick = async () => {
@@ -302,11 +391,15 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                 </div>
                 {deployError && <p className="text-xs text-red-500 mt-1">{deployError}</p>}
                 <div className="mt-2">
-                    <button onClick={handleDeployClick} disabled={isDeploying || isDescriptionDirty || isPending || !product['修改后文案']} className="w-full bg-green-500 text-white py-2 rounded-md hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors">
+                    <button
+                        onClick={handleDeployClick}
+                        disabled={isDeploying || isDescriptionDirty || isPending || !hasSavedCopy}
+                        className="w-full bg-green-500 text-white py-2 rounded-md hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                    >
                         {isDeploying ? '投放中...' : (isPending ? '待上架' : '投放到此账号')}
                     </button>
                     {isDescriptionDirty && <p className="text-xs text-center text-yellow-600 mt-1">请先保存文案再进行投放</p>}
-                    {!isDescriptionDirty && !product['修改后文案'] && <p className="text-xs text-center text-red-500 mt-1">必须先保存文案才能投放</p>}
+                    {!isDescriptionDirty && !hasSavedCopy && <p className="text-xs text-center text-red-500 mt-1">必须先保存文案才能投放</p>}
                 </div>
                 <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                     {deployedTo.length > 0 && (
@@ -380,13 +473,30 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                                 <textarea ref={modifiedTextareaRef} value={modifiedDescription} onChange={handleDescriptionChange} className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-500 text-sm resize-none overflow-hidden" rows={1} />
                             </div>
                         </div>
-                        <div className="mt-4 pt-4 border-t flex justify-end items-center gap-3">
-                            <button onClick={modifyTextWithAI} disabled={isLoadingAI} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
-                                {isLoadingAI ? '生成中...' : '🤖 AI 优化文案'}
+                        {isGeneratingImage && <p className="text-center text-blue-500 mt-4">图片生成中，请稍候...</p>}
+                        {generatedImageUrl && (
+                            <div className="mt-4 p-4 border-2 border-dashed border-green-400 rounded-lg">
+                                <p className="text-lg font-semibold mb-2 text-center">生成效果预览</p>
+                                <div className="relative w-full max-w-lg mx-auto aspect-square border rounded-md overflow-hidden bg-gray-100">
+                                    <Image src={generatedImageUrl} alt="生成的图片" fill style={{ objectFit: 'contain' }} />
+                                </div>
+                                <div className="mt-4 text-center">
+                                    <button onClick={handleSaveGeneratedImage} disabled={isSavingImage} className="bg-teal-600 hover:bg-teal-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
+                                        {isSavingImage ? '保存中...' : '✅ 保存此图片并更新'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                        <div className="mt-4 pt-4 border-t flex justify-end items-center gap-3 flex-wrap">
+                            <button onClick={handleGenerateImage} disabled={isGeneratingImage || isLoadingAI} className="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
+                                {isGeneratingImage ? '生成中...' : '🎨 生成预览'}
                             </button>
+                            <button onClick={modifyTextWithAI} disabled={isLoadingAI || isGeneratingImage} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
+                                {isLoadingAI ? '生成中...' : '🤖 AI 优化文案'}
+                 </button>
                             <button onClick={confirmChanges} disabled={isLoadingConfirm || !isDescriptionDirty} className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
                                 {isLoadingConfirm ? '保存中...' : '✅ 保存并关闭'}
-                            </button>
+                 </button>
                         </div>
                     </div>
                 </div>

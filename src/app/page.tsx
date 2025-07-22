@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+
+import Image from 'next/image';
 import ProductCard from '@/components/ProductCard'; // Import the new component
 
 // --- Environment Variables --- 
@@ -134,7 +136,8 @@ type Account = {
     created_at: string;
   updated_at: string;
   '待上架': (string | ScheduledProduct)[] | null;
-  '已上架': string[] | null;
+  '已上架': string[] | null; // Keep for legacy or other purposes if needed
+  '已上架json'?: { id: string | number; scheduled_at: string }[] | null;
   '关键词prompt': string | null;
   '业务描述': string | null;
   '文案生成prompt': string | null; // New field for custom prompt per account
@@ -424,7 +427,7 @@ export default function AccountsPage() {
             const [accountsPromise, keywordsPromise, productsPromise] = await Promise.all([
                  supabase
                     .from('accounts_duplicate')
-                    .select('name, created_at, updated_at, "待上架", "已上架", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule", "xhs_头像"')
+                    .select('name, created_at, updated_at, "待上架", "已上架", "已上架json", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule", "xhs_头像"')
                     .order('name', { ascending: true }),
                  supabase.from('important_keywords_本人').select('id, account_name, keyword'),
                  supabase.from('search_results_duplicate_本人').select('type, created_at') // Fetch only necessary fields for counting
@@ -465,7 +468,7 @@ export default function AccountsPage() {
             // Merge keywords into accounts and initialize editing state
             const mergedAccounts = accounts.map(acc => {
                 const defaultBusinessPrompt = `我的业务是推广名为"${acc.name}"的社交媒体账号，用于发布相关内容以吸引客户。`;
-                const defaultCopywritingPrompt = `请根据以下信息，为我生成一段适用于"${acc.name}"这个账号的、吸引人的社交媒体商品推广文案。`;
+                const defaultCopywritingPrompt = `修改文案，请保留关键词！不要谄媚，不要口水话，直入关键点，使其，更简洁、突出关键词，去掉敏感词汇。 不能出现脏话。敏感词。1.不能出现下面词汇：指dao答yi、答疑、中介勿扰、账号、基本没怎么用过、标价出！可以直接拍下！、电子资料售出不退不换！、不退换、拍下秒发、使用痕迹等相似词汇。                                                            2.重复检查一轮，以空格或标点为边界，删掉同时带有"退""换"两字的句子 3.删掉中文或者英文国家地名比如澳洲AU，英国UK,香港HK等等。4. 如果既有词汇 题目，又有词汇 答案 （形式如 "题目 & 答案""题目和答案"等），用"Q&A"代替 5.敏感词汇如 答案用answer替换。6.删掉最新，最好等等字体。7.删掉价格。8.排列一下文案更美观。9. 不要markdown格式符号。10.不能出现"商品信息"、"关键词"等字体。11.递归检查，不要出现"*"这个符号。12.拼写检查，删除汉字专有名词内的空格，删除英文单字内的空格。13.为文案生成 #+关键词，要求围绕业务和文案弄8个左右。14.要围绕原始文案关键词改写 不能把他的关键业务删除。15.结尾添加欢迎私信咨询，`;
                 const joinedKeywords = (keywordsMap.get(acc.name) || []).join('\n');
                 
                 // --- Data Reconciliation ---
@@ -673,9 +676,9 @@ export default function AccountsPage() {
 
         setIsAddingAccount(true);
         try {
-            const defaultKeywordPrompt = '你是一个关键词生成工具。请为我生成5到10个相关的中文推广关键词。严格遵守以下规则：1. 只返回关键词本身。2. 每个关键词占一行。3. 禁止添加任何编号、符号、解释或无关的对话。';
+            const defaultKeywordPrompt = '你是一个关键词生成工具。请为我生成5到10个相关的推广关键词。最好是英文,严格遵守以下规则：1. 只返回关键词本身。2. 每个关键词占一行。3. 禁止添加任何编号、符号、解释或无关的对话。';
             const defaultBusinessPrompt = `我的业务是推广名为"${trimmedName}"的社交媒体账号，用于发布相关内容以吸引客户。`;
-            const defaultCopywritingPrompt = `请根据以下信息，为我生成一段适用于"${trimmedName}"这个账号的、吸引人的社交媒体商品推广文案。`;
+            const defaultCopywritingPrompt = `修改文案，请保留关键词！不要谄媚，不要口水话，直入关键点，使其，更简洁、突出关键词，去掉敏感词汇。 不能出现脏话。敏感词。1.不能出现下面词汇：指dao答yi、答疑、中介勿扰、账号、基本没怎么用过、标价出！可以直接拍下！、电子资料售出不退不换！、不退换、拍下秒发、使用痕迹等相似词汇。                                                            2.重复检查一轮，以空格或标点为边界，删掉同时带有"退""换"两字的句子 3.删掉中文或者英文国家地名比如澳洲AU，英国UK,香港HK等等。4. 如果既有词汇 题目，又有词汇 答案 （形式如 "题目 & 答案""题目和答案"等），用"Q&A"代替 5.敏感词汇如 答案用answer替换。6.删掉最新，最好等等字体。7.删掉价格。8.排列一下文案更美观。9. 不要markdown格式符号。10.不能出现"商品信息"、"关键词"等字体。11.递归检查，不要出现"*"这个符号。12.拼写检查，删除汉字专有名词内的空格，删除英文单字内的空格。13.为文案生成 #+关键词，要求围绕业务和文案弄8个左右。14.要围绕原始文案关键词改写 不能把他的关键业务删除。15.结尾添加欢迎私信咨询，`;
             const { error } = await supabase
                 .from('accounts_duplicate')
                 .insert({ 
@@ -1547,81 +1550,102 @@ export default function AccountsPage() {
             
             {!loadingAccounts && !errorAccounts && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {allAccounts.map(account => (
-                        <div key={account.name}
-                             onClick={() => handleAccountSelectForProducts(account)}
-                             className="border border-gray-200 dark:border-gray-700 p-4 rounded-lg bg-white dark:bg-gray-800 shadow-md relative group/account flex flex-col gap-3 cursor-pointer hover:border-blue-500 dark:hover:border-blue-400 transition-colors"
-                        >
-                <button
-                                onClick={(e) => { e.stopPropagation(); handleDeleteAccount(account.name); }}
-                                disabled={deletingAccount === account.name}
-                                className="absolute top-2 right-2 p-1 bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-800/70 rounded-full opacity-0 group-hover/account:opacity-100 z-10"
-                >
-                                {deletingAccount === account.name ? "..." : "✕"}
-                </button>
-                            <div className="flex items-center gap-3 border-b pb-2 pr-8">
-                                {account['xhs_头像'] && (
-                                    <img src={account['xhs_头像']} alt={account.name} className="w-12 h-12 rounded-full object-cover border-2 border-pink-300" />
-                                )}
-                                <div className="flex-grow">
-                                    <h3 className="font-bold text-lg">{account.name}</h3>
-                                    {account.xhs_account && (
-                                        <p className="text-xs text-gray-500">@{account.xhs_account}</p>
-                                    )}
-                                </div>
-                            </div>
-                             <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400 mt-2">
-                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
-                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
-                                <div className="mt-2">
-                                    <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold mr-2 px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
-                                        今日新增: {account.today_new_products}
-                                    </span>
-                                </div>
-                </div>
-
-                            <div className="flex flex-col gap-3 mt-2 border-t pt-3">
-                                <div>
-                                    <TagList 
-                                        title="今日上架计划" 
-                                        items={account.todays_schedule || []} 
-                                        color="blue" 
-                                        accountName={account.name}
-                                        arrayKey='待上架'
-                                        onDeleteItem={handleDeleteItemFromArray}
-                                        layout="vertical"
-                                        deployedIds={account['已上架']}
-                                        editingSchedule={editingSchedule}
-                                        setEditingSchedule={setEditingSchedule}
-                                        onUpdateTime={handleUpdateScheduleTime}
-                                    />
-                                </div>
-                                <div>
-                                    <TagList 
-                                        title="已上架" 
-                                        items={account['已上架']} 
-                                        color="green" 
-                                        accountName={account.name}
-                                        arrayKey='已上架'
-                                        onDeleteItem={handleDeleteItemFromArray}
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
-                   <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setEditingAccount(account);
-                                    }}
-                                    className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center"
+                    {allAccounts.map(account => {
+                        const today = new Date();
+                        const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                        return (
+                            <div key={account.name}
+                                 onClick={() => handleAccountSelectForProducts(account)}
+                                 className="border border-gray-200 dark:border-gray-700 p-4 rounded-lg bg-white dark:bg-gray-800 shadow-md relative group/account flex flex-col gap-3 cursor-pointer hover:border-blue-500 dark:hover:border-blue-400 transition-colors"
+                            >
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteAccount(account.name); }}
+                                    disabled={deletingAccount === account.name}
+                                    className="absolute top-2 right-2 p-1 bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-800/70 rounded-full opacity-0 group-hover/account:opacity-100 z-10"
                                 >
-                                    <span>高级设置</span>
-                                    <span>⚙️</span>
-                    </button>
+                                    {deletingAccount === account.name ? "..." : "✕"}
+                                </button>
+                                <div className="flex items-center gap-3 border-b pb-2 pr-8">
+                                    {account['xhs_头像'] ? (
+                                        <div className="relative w-12 h-12 rounded-full overflow-hidden border-2 border-pink-400">
+                                            <Image 
+                                                src={account['xhs_头像']} 
+                                                alt={`${account.xhs_account || account.name}'s avatar`} 
+                                                fill 
+                                                style={{ objectFit: 'cover' }}
+                                                sizes="48px"
+                                            />
+                                        </div>
+                                    ) : (
+                                        <div className="w-12 h-12 rounded-full bg-gray-300 dark:bg-gray-700 flex items-center justify-center">
+                                            <span className="text-xl text-gray-500 dark:text-gray-400">?</span>
+                                        </div>
+                                    )}
+                                    <div className="flex-grow">
+                                        <h3 className="font-bold text-lg">{account.name}</h3>
+                                        {account.xhs_account && (
+                                            <p className="text-xs text-gray-500">@{account.xhs_account}</p>
+                                        )}
+                                    </div>
+                                </div>
+                                 <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400 mt-2">
+                                    <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
+                                    <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
+                                            今日新增商品: {account.today_new_products}
+                                        </span>
+                                        {account['已上架json'] && (
+                                            <span className="inline-block bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-green-200 dark:text-green-900">
+                                                今日已上架: {(account['已上架json'] || []).filter(item => new Date(item.scheduled_at) >= startOfToday).length}
+                                        </span>
+                                    )}
+                                    </div>
+                    </div>
+
+                                <div className="flex flex-col gap-3 mt-2 border-t pt-3">
+                                    <div>
+                                        <TagList 
+                                            title="今日上架计划" 
+                                            items={account.todays_schedule || []} 
+                                            color="blue" 
+                                            accountName={account.name}
+                                            arrayKey='待上架'
+                                            onDeleteItem={handleDeleteItemFromArray}
+                                            layout="vertical"
+                                            deployedIds={(account['已上架json'] || []).map(item => item.id)}
+                                            editingSchedule={editingSchedule}
+                                            setEditingSchedule={setEditingSchedule}
+                                            onUpdateTime={handleUpdateScheduleTime}
+                                        />
+                                    </div>
+                                    <div>
+                                        <TagList 
+                                            title="已上架" 
+                                            items={account['已上架']} 
+                                            color="green" 
+                                            accountName={account.name}
+                                            arrayKey='已上架'
+                                            onDeleteItem={handleDeleteItemFromArray}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
+                       <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setEditingAccount(account);
+                                        }}
+                                        className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center"
+                                    >
+                                        <span>高级设置</span>
+                                        <span>⚙️</span>
+                        </button>
+                    </div>
                 </div>
-            </div>
-                    ))}
+                        )
+                    })}
                 </div>
             )}
             {!loadingAccounts && !errorAccounts && allAccounts.length === 0 && (
