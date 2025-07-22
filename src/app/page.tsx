@@ -138,7 +138,7 @@ type Account = {
   updated_at: string;
   display_order?: number | null;
   '待上架': (string | ScheduledProduct)[] | null;
-  '已上架': string[] | null; // Keep for legacy or other purposes if needed
+  '已上架': { id: string | number; '上架时间': string }[] | null;
   '已上架json'?: { id: string | number; scheduled_at: string }[] | null;
   '关键词prompt': string | null;
   '业务描述': string | null;
@@ -212,7 +212,7 @@ type AiGeneratedAccount = {
 // --- Helper Components ---
 const TagList: React.FC<{ 
     title: string; 
-    items: (string | number | ScheduledProduct)[] | null; 
+    items: (string | number | ScheduledProduct | { id: string | number; '上架时间': string })[] | null; 
     color: string;
     accountName: string;
     arrayKey: keyof Account;
@@ -243,7 +243,7 @@ const TagList: React.FC<{
         };
 
         return displayItems.map((item, index) => {
-            // Handle placeholders
+            // Handle placeholders in '待上架'
             if (typeof item === 'object' && item !== null && (item as ScheduledProduct).isPlaceholder) {
                 const placeholder = item as ScheduledProduct;
                 return (
@@ -254,7 +254,29 @@ const TagList: React.FC<{
                 );
             }
             
-            // Handle simple string/number items (for '已上架' list, etc.)
+            // Handle new '已上架' JSON format
+            if (typeof item === 'object' && item !== null && '上架时间' in item) {
+                const deployedItem = item as { id: string | number; '上架时间': string };
+                const displayTime = new Date(deployedItem['上架时间']).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+                 return (
+                    <span key={index} className={`inline-flex items-center px-2 py-1 rounded text-sm font-mono bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300 group/tag`}>
+                        ID: {deployedItem.id} @ {displayTime}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteItem(accountName, arrayKey, String(deployedItem.id));
+                            }}
+                            className="ml-1.5 p-1 text-2xl leading-none opacity-0 group-hover/tag:opacity-100 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200 focus:opacity-100 transition-opacity"
+                            aria-label={`Remove ${deployedItem.id}`}
+                        >
+                            &times;
+                        </button>
+                    </span>
+                );
+            }
+
+            // Handle simple string/number items (for '待上架' list before scheduling, etc.)
             if (typeof item !== 'object') {
                  return (
                     <span key={index} className={`inline-flex items-center px-2 py-1 rounded text-sm font-mono bg-${color}-100 dark:bg-${color}-900/50 text-${color}-800 dark:text-${color}-300 group/tag`}>
@@ -273,6 +295,7 @@ const TagList: React.FC<{
                 );
             }
 
+            // Handle '待上架' scheduled items
             const scheduledItem = item as ScheduledProduct;
             const isDeployed = deployedIds?.some(id => String(id) === String(scheduledItem.id));
             const displayTime = new Date(scheduledItem.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -461,7 +484,7 @@ export default function AccountsPage() {
             const [accountsPromise, keywordsPromise, productsPromise] = await Promise.all([
                  supabase
                     .from('accounts_duplicate')
-                    .select('name, created_at, updated_at, "待上架", "已上架", "已上架json", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule", "xhs_头像", "display_order"')
+                    .select('name, created_at, updated_at, "待上架", "已上架json", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule", "xhs_头像", "display_order"')
                     .order('display_order', { ascending: true })
                     .order('name', { ascending: true }),
                  supabase.from('important_keywords_本人').select('id, account_name, keyword'),
@@ -584,6 +607,7 @@ export default function AccountsPage() {
                 return {
                     ...acc,
                     '待上架': cleanPendingProducts, // Use the reconciled list
+                    '已上架': acc['已上架json'], // Use the new JSON field for the "已上架" display
                     keywords: joinedKeywords,
                     '关键词prompt': acc['关键词prompt'] || defaultKeywordPrompt,
                     '业务描述': acc['业务描述'] || defaultBusinessPrompt,
@@ -918,9 +942,12 @@ export default function AccountsPage() {
         const originalAccount = allAccounts.find(acc => acc.name === accountName);
         if (!originalAccount) return;
 
-        const originalArray = (originalAccount[arrayKey] as (string | ScheduledProduct)[] | null) || [];
+        // Determine which database field to update based on the arrayKey
+        const dbFieldToUpdate = arrayKey === '已上架' ? '已上架json' : '待上架';
+
+        const originalArray = (originalAccount[arrayKey] as (string | { id: string | number })[] | null) || [];
         const newArray = originalArray.filter(item => {
-            const id = typeof item === 'string' ? item : (item as ScheduledProduct)?.id;
+            const id = typeof item === 'string' ? item : (item as { id: string | number })?.id;
             return String(id) !== itemToDelete;
         });
 
@@ -928,7 +955,7 @@ export default function AccountsPage() {
         try {
             const { error } = await supabase
                 .from('accounts_duplicate')
-                .update({ [arrayKey]: newArray, updated_at: new Date().toISOString() })
+                .update({ [dbFieldToUpdate]: newArray, updated_at: new Date().toISOString() })
                 .eq('name', accountName);
 
             if (error) {
@@ -1753,7 +1780,7 @@ ${aiBatchInput}
                         + 新增关键词
                 </button>
                   </div>
-                 </div>
+                </div>
 
                 {loadingKeywords && <p className="italic">正在加载关键词...</p>}
                 {errorKeywords && <p className="text-red-500">{errorKeywords}</p>}
@@ -1768,25 +1795,25 @@ ${aiBatchInput}
                             <div key={kw.id} className="flex flex-col gap-2 p-3 border rounded-lg bg-gray-50 dark:bg-gray-800 shadow-sm transition-all hover:shadow-md">
                                 <div className="flex items-center gap-2">
                                    <span className="text-sm font-mono text-gray-500 w-12 flex-shrink-0">ID: {kw.id}</span>
-                                   <input
-                                     type="text"
-                                     value={kw.keyword}
-                                     onChange={(e) => handleKeywordTextChange(kw.id, e.target.value)}
-                                     className="flex-grow p-1.5 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600"
-                                   />
-                                    <button
-                                        onClick={() => handleUpdateKeyword(kw.id)}
+                           <input
+                             type="text"
+                             value={kw.keyword}
+                             onChange={(e) => handleKeywordTextChange(kw.id, e.target.value)}
+                             className="flex-grow p-1.5 border rounded-md text-sm dark:bg-gray-700 dark:border-gray-600"
+                           />
+                <button
+                             onClick={() => handleUpdateKeyword(kw.id)}
                                         className="bg-blue-500 hover:bg-blue-600 text-white text-xs py-1.5 px-3 rounded-md flex-shrink-0"
-                                    >
-                                        保存
-                                    </button>
-                                    <button
-                                        onClick={() => handleDeleteKeywordFromList(kw.id)}
+                >
+                             保存
+                </button>
+                <button
+                              onClick={() => handleDeleteKeywordFromList(kw.id)}
                                         className="bg-red-500 hover:bg-red-600 text-white text-xs py-1.5 px-3 rounded-md flex-shrink-0"
-                                    >
-                                        删除
-                                    </button>
-                                </div>
+                >
+                             删除
+                </button>
+                        </div>
 
                                 {latestHistory ? (
                                     <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400 space-y-1">
@@ -1906,16 +1933,16 @@ ${aiBatchInput}
                     {/* Top row: Navigation and Title */}
                     <div className="flex justify-between items-center mb-4">
                         <div className="flex items-center gap-4">
-                            <button
-                                onClick={handleBackToAccounts}
+                <button
+                        onClick={handleBackToAccounts}
                                 className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-colors"
-                            >
+                >
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
                                 返回
-                            </button>
+                </button>
                             <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-200 tracking-tight">
-                                {selectedAccountForProducts.name}
-                            </h1>
+                        {selectedAccountForProducts.name}
+            </h1>
                         </div>
                         <button
                             onClick={() => setIsAnalysisModalOpen(true)}
@@ -1947,19 +1974,19 @@ ${aiBatchInput}
                             <div className="flex-shrink-0 flex items-center gap-4 pt-1">
                                 <span className="text-sm font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 py-1.5 px-3 rounded-full">
                                     今日获取: {products.filter(p => new Date(p.created_at) >= new Date(new Date().setHours(0, 0, 0, 0))).length} 个
-                                </span>
-                                <select
-                                    value={timeFilter}
-                                    onChange={(e) => setTimeFilter(e.target.value)}
+                        </span>
+                        <select
+                            value={timeFilter}
+                            onChange={(e) => setTimeFilter(e.target.value)}
                                     className="bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm py-1.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
-                                >
-                                    <option value="all">全部时间</option>
-                                    <option value="today">今天</option>
-                                    <option value="yesterday">昨天</option>
-                                    <option value="week">一周内</option>
-                                </select>
-                            </div>
-                        </div>
+                        >
+                            <option value="all">全部时间</option>
+                            <option value="today">今天</option>
+                            <option value="yesterday">昨天</option>
+                            <option value="week">一周内</option>
+                        </select>
+                    </div>
+                </div>
                     </div>
                 </div>
 
@@ -2046,21 +2073,21 @@ ${aiBatchInput}
     // Render Main Account List View
                                                return (
         <div className="p-5 font-sans bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
-            <div className="flex justify-between items-center mb-4">
+                        <div className="flex justify-between items-center mb-4">
                 <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">账号管理</h1>
                     <div className="flex items-center gap-2">
-                        <button
+                            <button
                             onClick={() => setIsAiAddAccountModalOpen(true)}
                             className="bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold py-2 px-4 rounded"
-                        >
+                            >
                             🤖 AI 批量生成
-                        </button>
-                       <button
-                        onClick={() => setIsAddAccountModalOpen(true)}
-                        className="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-2 px-4 rounded"
-                        >
-                        + 添加账号
-                        </button>
+                            </button>
+                   <button
+                    onClick={() => setIsAddAccountModalOpen(true)}
+                    className="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-2 px-4 rounded"
+                    >
+                    + 添加账号
+                    </button>
                     </div>
                 </div>
 
@@ -2080,9 +2107,9 @@ ${aiBatchInput}
                                 className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
                             >
                                 {allAccounts.map((account, index) => {
-                                    const today = new Date();
-                                    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                                    return (
+                        const today = new Date();
+                        const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                        return (
                                         <Draggable key={account.name} draggableId={account.name} index={index}>
                                             {(provided, snapshot) => (
                                                 <div
@@ -2098,36 +2125,36 @@ ${aiBatchInput}
                                                             title="拖拽排序"
                                                         >
                                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                                              <path d="M5 4a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2z" />
+                                                              <path d="M5 4a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2z" />
                                                             </svg>
                                                         </div>
                                                         <div className="flex-grow">
                                                             <div className="flex items-center gap-3">
-                                                                {account['xhs_头像'] ? (
+                                    {account['xhs_头像'] ? (
                                                                     <div className="relative w-12 h-12 rounded-full overflow-hidden border-2 border-pink-400 flex-shrink-0">
-                                                                        <Image 
-                                                                            src={account['xhs_头像']} 
-                                                                            alt={`${account.xhs_account || account.name}'s avatar`} 
-                                                                            fill 
-                                                                            style={{ objectFit: 'cover' }}
-                                                                            sizes="48px"
-                                                                        />
-                                                                    </div>
-                                                                ) : (
+                                            <Image 
+                                                src={account['xhs_头像']} 
+                                                alt={`${account.xhs_account || account.name}'s avatar`} 
+                                                fill 
+                                                style={{ objectFit: 'cover' }}
+                                                sizes="48px"
+                                            />
+                                        </div>
+                                    ) : (
                                                                     <div className="w-12 h-12 rounded-full bg-gray-300 dark:bg-gray-700 flex items-center justify-center flex-shrink-0">
-                                                                        <span className="text-xl text-gray-500 dark:text-gray-400">?</span>
-                                                                    </div>
-                                                                )}
+                                            <span className="text-xl text-gray-500 dark:text-gray-400">?</span>
+                                        </div>
+                                    )}
                                                                 <div 
                                                                     onClick={() => handleAccountSelectForProducts(account)}
                                                                     className="flex-grow cursor-pointer"
                                                                 >
-                                                                    <h3 className="font-bold text-lg">{account.name}</h3>
-                                                                    {account.xhs_account && (
-                                                                        <p className="text-xs text-gray-500">@{account.xhs_account}</p>
-                                                                    )}
-                                                                </div>
-                                                            </div>
+                                        <h3 className="font-bold text-lg">{account.name}</h3>
+                                        {account.xhs_account && (
+                                            <p className="text-xs text-gray-500">@{account.xhs_account}</p>
+                                        )}
+                                    </div>
+                                </div>
                                                         </div>
                                                          <button
                                                             onClick={(e) => { e.stopPropagation(); handleDeleteAccount(account.name); }}
@@ -2142,68 +2169,68 @@ ${aiBatchInput}
                                                         onClick={() => handleAccountSelectForProducts(account)}
                                                     >
                                                          <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400">
-                                                            <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
-                                                            <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
-                                                            <div className="mt-2 flex flex-wrap gap-2">
-                                                                <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
-                                                                    今日新增商品: {account.today_new_products}
-                                                                </span>
-                                                                {account['已上架json'] && (
-                                                                    <span className="inline-block bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-green-200 dark:text-green-900">
-                                                                        今日已上架: {(account['已上架json'] || []).filter(item => new Date(item.scheduled_at) >= startOfToday).length}
-                                                                </span>
-                                                            )}
-                                                            </div>
-                                                        </div>
+                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
+                                <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
+                                            今日新增商品: {account.today_new_products}
+                                        </span>
+                                        {account['已上架json'] && (
+                                            <span className="inline-block bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-green-200 dark:text-green-900">
+                                                今日已上架: {(account['已上架json'] || []).filter(item => new Date(item.scheduled_at) >= startOfToday).length}
+                                        </span>
+                                    )}
+                                    </div>
+                </div>
 
-                                                        <div className="flex flex-col gap-3 mt-2 border-t pt-3">
-                                                            <div>
-                                                            <TagList 
-                                                                title="今日上架计划" 
-                                                                items={account.todays_schedule || []} 
-                                                                color="blue" 
-                                                                accountName={account.name}
-                                                                arrayKey='待上架'
-                                                                    onDeleteItem={handleDeleteItemFromArray}
-                                                                layout="vertical"
-                                                                    deployedIds={(account['已上架json'] || []).map(item => item.id)}
-                                                                    editingSchedule={editingSchedule}
-                                                                    setEditingSchedule={setEditingSchedule}
-                                                                    onUpdateTime={handleUpdateScheduleTime}
-                                                            />
-                                                        </div>
-                                                            <div>
-                                                            <TagList 
-                                                                    title="已上架" 
-                                                                    items={account['已上架']} 
-                                                                    color="green" 
-                                                                accountName={account.name}
-                                                                    arrayKey='已上架'
-                                                                onDeleteItem={handleDeleteItemFromArray}
-                                                            />
-                                                            </div>
-                                                    </div>
+                                <div className="flex flex-col gap-3 mt-2 border-t pt-3">
+                                    <div>
+                                    <TagList 
+                                        title="今日上架计划" 
+                                        items={account.todays_schedule || []} 
+                                        color="blue" 
+                                        accountName={account.name}
+                                        arrayKey='待上架'
+                                            onDeleteItem={handleDeleteItemFromArray}
+                                        layout="vertical"
+                                            deployedIds={(account['已上架json'] || []).map(item => item.id)}
+                                            editingSchedule={editingSchedule}
+                                            setEditingSchedule={setEditingSchedule}
+                                            onUpdateTime={handleUpdateScheduleTime}
+                                    />
+                                </div>
+                                    <div>
+                                    <TagList 
+                                            title="已上架" 
+                                            items={account['已上架']} 
+                                            color="green" 
+                                        accountName={account.name}
+                                            arrayKey='已上架'
+                                        onDeleteItem={handleDeleteItemFromArray}
+                                    />
+                                    </div>
+                            </div>
 
-                                                    <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
-                                                       <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setEditingAccount(account);
-                                                            }}
-                                                            className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center"
-                                                        >
-                                                            <span>高级设置</span>
-                                                            <span>⚙️</span>
-                                                        </button>
-                                                    </div>
-                                                </div>
+                            <div className="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2">
+                   <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingAccount(account);
+                                    }}
+                                    className="w-full text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 flex justify-between items-center"
+                                >
+                                    <span>高级设置</span>
+                                    <span>⚙️</span>
+                    </button>
+                </div>
+            </div>
                                             </div>
                                         )}
                                     </Draggable>
                                     );
-                                })}
+                    })}
                                 {provided.placeholder}
-                            </div>
+                </div>
                         )}
                     </Droppable>
                 </DragDropContext>
@@ -2316,10 +2343,10 @@ ${aiBatchInput}
                                     '🚀 开始生成'
                                 )}
                          </button>
-                        </div>
                     </div>
-                 </div>
-            )}
+                </div>
+                </div>
+             )}
 
             {editingAccount && (
                  <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4" onClick={() => setEditingAccount(null)}>

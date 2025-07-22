@@ -530,7 +530,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                  <div className="p-2 border rounded-md bg-gray-50 dark:bg-gray-800">
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">手动更新图片</label>
                     <div className="flex gap-2 mt-1">
-                        <input value={newImageUrl} onChange={(e) => setNewImageUrl(e.target.value)} placeholder="输入新图片URL..." className="w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600 flex-grow" />
+                <input value={newImageUrl} onChange={(e) => setNewImageUrl(e.target.value)} placeholder="输入新图片URL..." className="w-full p-1 border rounded text-xs dark:bg-gray-700 dark:border-gray-600 flex-grow" />
                         <button onClick={updateProductImage} className="text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 px-3 rounded-md flex-shrink-0">更新</button>
                     </div>
                 </div>
