@@ -23,7 +23,7 @@ interface ProductCardProps {
     onDelete: (id: string) => Promise<void>;
     onDuplicate: (id: string) => Promise<void>;
     onDeploy: (productId: string) => Promise<void>;
-    onUpdate: () => void; // Callback to notify parent of an update
+    onUpdate: (productId: string, newText: string) => void; // Callback to notify parent of an update
     callAi: (prompt: string) => Promise<string>;
     accountName: string;
     onSaveKeywords: (accountName: string, keywords: string[]) => Promise<void>;
@@ -136,7 +136,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             // Call parent to delete from central library
             await onDeleteKeywordFromLibrary(accountName, keywordToDelete);
             
-            onUpdate(); // Refresh parent state
+            onUpdate(product.id, modifiedDescription); // Refresh parent state
 
         } catch (e) {
             if (getErrorMessage(e).includes('confirm')) {
@@ -238,7 +238,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             if (!res.ok) throw new Error((await res.json()).message);
             setImageUrl(url.trim()); // Update local image state immediately
             setNewImageUrl(''); // Clear the input
-            onUpdate(); // Trigger parent refresh
+            // onUpdate(); // Removed to prevent jarring page refresh, local state update is enough.
         } catch (e) {
             setCardError(getErrorMessage(e));
             throw e; // Re-throw to be caught by the calling function
@@ -373,7 +373,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             });
                 if (!updateRes.ok) throw new Error((await updateRes.json()).message);
                 setAiKeywords(keywordsArray);
-                onUpdate();
+                onUpdate(product.id, modifiedDescription); // Refresh parent state
             }
         } catch (e) {
             setCardError(getErrorMessage(e));
@@ -389,7 +389,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             return;
         }
         await onSaveKeywords(accountName, keywordsToSave);
-        onUpdate();
+        onUpdate(product.id, modifiedDescription); // Refresh parent state
     };
 
     const handleKeywordToggle = (keyword: string) => {
@@ -408,6 +408,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         try {
             const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify({ "修改后文案": modifiedDescription }) });
             if (!res.ok) throw new Error((await res.json()).message);
+            
+            // Notify parent to update state without full refresh.
+            onUpdate(product.id, modifiedDescription);
+            
             setIsDescriptionDirty(false);
             setHasSavedCopy(true); // Manually update save state
             setIsEditingModalOpen(false);
@@ -470,9 +474,9 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                     )}
             
             <div className="mt-1">
-                <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">原始文案</label>
+                <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">产品文案</label>
                 <p className="mt-1 p-2 w-full text-xs bg-gray-100 dark:bg-gray-900/50 rounded-md border dark:border-gray-600/50 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono">
-                    {product.result_text_content || '无原始文案'}
+                    {product['修改后文案'] || product.result_text_content || '无文案'}
                 </p>
             </div>
 
