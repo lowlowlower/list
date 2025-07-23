@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import Image from 'next/image';
+import { useTranslation } from './TranslationProvider'; // Import the hook
 
 // --- Types ---
 type Product = {
@@ -23,7 +24,7 @@ interface ProductCardProps {
     onDelete: (id: string) => Promise<void>;
     onDuplicate: (id: string) => Promise<void>;
     onDeploy: (productId: string) => Promise<void>;
-    onUpdate: (productId: string, newText: string) => void; // Callback to notify parent of an update
+    onUpdate: () => void; // Callback to notify parent of an update
     callAi: (prompt: string) => Promise<string>;
     accountName: string;
     onSaveKeywords: (accountName: string, keywords: string[]) => Promise<void>;
@@ -70,6 +71,7 @@ const getRelativeTime = (isoString: string) => {
 // --- Main Component ---
 const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicate, onDeploy, onUpdate, callAi, accountName, onSaveKeywords, onDeleteKeywordFromLibrary, customCopywritingPrompt, businessDescription, onManageAccountKeywords, deployedTo, isPending }) => {
     // Component State
+    const { translate } = useTranslation(); // Use the hook to get the translate function
     const [modifiedDescription, setModifiedDescription] = useState(product['修改后文案'] || product.result_text_content || '');
     const [isDescriptionDirty, setIsDescriptionDirty] = useState(false);
     const [aiKeywords, setAiKeywords] = useState<string[]>([]);
@@ -136,7 +138,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             // Call parent to delete from central library
             await onDeleteKeywordFromLibrary(accountName, keywordToDelete);
             
-            onUpdate(product.id, modifiedDescription); // Refresh parent state
+            onUpdate(); // Refresh parent state
 
         } catch (e) {
             if (getErrorMessage(e).includes('confirm')) {
@@ -348,7 +350,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         setCardError(null);
         const original_text = product.result_text_content || '';
         const prompt = `
-            请基于以下业务描述和产品文案，提取5-8个最相关英文关键词。
+            请基于以下业务描述和产品文案，提取2-3个最相关英文关键词。
             要求：
             1.  每个关键词占一行。
             2.  不要添加任何编号、解释或无关文字。
@@ -373,7 +375,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             });
                 if (!updateRes.ok) throw new Error((await updateRes.json()).message);
                 setAiKeywords(keywordsArray);
-                onUpdate(product.id, modifiedDescription); // Refresh parent state
+                onUpdate();
             }
         } catch (e) {
             setCardError(getErrorMessage(e));
@@ -389,7 +391,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             return;
         }
         await onSaveKeywords(accountName, keywordsToSave);
-        onUpdate(product.id, modifiedDescription); // Refresh parent state
+        onUpdate();
     };
 
     const handleKeywordToggle = (keyword: string) => {
@@ -408,13 +410,10 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         try {
             const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify({ "修改后文案": modifiedDescription }) });
             if (!res.ok) throw new Error((await res.json()).message);
-            
-            // Notify parent to update state without full refresh.
-            onUpdate(product.id, modifiedDescription);
-            
             setIsDescriptionDirty(false);
             setHasSavedCopy(true); // Manually update save state
             setIsEditingModalOpen(false);
+            onUpdate(); // Notify parent to refetch data to show the updated text on card.
         } catch (e) { setCardError(getErrorMessage(e)); } finally { setIsLoadingConfirm(false); }
     };
 
@@ -447,13 +446,25 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
             <div className="flex justify-between items-start">
                 <div className="text-sm pr-8">
                     <div><strong>ID:</strong> {product.id} | <strong>价格:</strong> {product.价格 || 'N/A'}</div>
-                    <div className="mt-2 flex items-center gap-2">
-                        <span className="text-sm font-semibold bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 py-1 px-2.5 rounded-md">
-                            {getRelativeTime(product.created_at)}
-                        </span>
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
                         {product.keyword && (
-                            <span className="text-sm font-semibold bg-teal-100 dark:bg-teal-800 text-teal-800 dark:text-teal-200 py-1 px-2.5 rounded-md">
-                                关键词: {product.keyword}
+                            <span 
+                                className="inline-flex items-center gap-1.5 text-sm font-semibold bg-teal-100 dark:bg-teal-800 text-teal-800 dark:text-teal-200 py-1 px-2.5 rounded-md"
+                                title={`关键词: ${product.keyword}\n具体爬取时间: ${new Date(product.created_at).toLocaleString('zh-CN')}`}
+                            >
+                                <span className="truncate max-w-[180px]">关键词: {product.keyword}</span>
+                                <span className="text-xs font-normal opacity-75 whitespace-nowrap">({getRelativeTime(product.created_at)})</span>
+                            </span>
+                        )}
+                        {deployedTo.length > 0 && (
+                            <span 
+                                className="text-sm font-semibold bg-yellow-100 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 py-1 px-2.5 rounded-md flex items-center gap-1"
+                                title={`已上架到 ${deployedTo.length} 个账号: ${deployedTo.join(', ')}`}
+                            >
+                                {Array.from({ length: deployedTo.length }).map((_, i) => (
+                                    <span key={i}>✨</span>
+                                ))}
+                                <span>({deployedTo.length})</span>
                             </span>
                         )}
                     </div>
@@ -474,7 +485,18 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                     )}
             
             <div className="mt-1">
-                <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">产品文案</label>
+                <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">产品文案</label>
+                    <button 
+                        onClick={() => translate(product['修改后文案'] || product.result_text_content || '', 'Auto-detect', 'English')}
+                        className="p-1 text-gray-400 hover:text-blue-500 rounded-full"
+                        title="翻译文案"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 5h12M9 3v2m4 13l4-4M19 9l-4 4M9 15h6M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </button>
+                </div>
                 <p className="mt-1 p-2 w-full text-xs bg-gray-100 dark:bg-gray-900/50 rounded-md border dark:border-gray-600/50 max-h-24 overflow-y-auto whitespace-pre-wrap font-mono">
                     {product['修改后文案'] || product.result_text_content || '无文案'}
                 </p>
@@ -564,7 +586,15 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                 </div>
                 <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                      {deployedTo.length > 0 && (
-                        <p>已投放到: {deployedTo.join(', ')}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold">已上架到:</span>
+                             <div className="flex items-center gap-x-1">
+                                {Array.from({ length: deployedTo.length }).map((_, i) => (
+                                    <span key={i} title={`${deployedTo.length}个账号`} className="text-yellow-500">✨</span>
+                                ))}
+                            </div>
+                            <span>({deployedTo.join(', ')})</span>
+                        </div>
                     )}
                 </div>
                 </div>
