@@ -350,7 +350,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         if (!customCopywritingPrompt.trim()) return setCardError('账号专属的文案提示词为空');
         setIsLoadingAI(true);
         setCardError(null);
-        const inputText = `${customCopywritingPrompt}\n\n[业务描述]:\n${businessDescription}\n\n[商品信息]:\n关键词: ${product.keyword}\n现有文案参考: ${modifiedDescription}`;
+        const inputText = `${customCopywritingPrompt}\n\n[商品信息]:\n关键词: ${product.keyword}\n现有文案参考: ${modifiedDescription}`;
         try {
             const aiText = await callAi(inputText);
                 setModifiedDescription(aiText.trim());
