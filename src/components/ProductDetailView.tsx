@@ -4,6 +4,8 @@ import React, { useState, useEffect } from 'react';
 import ProductCard from '@/components/ProductCard';
 import type { Account, Product } from '@/types';
 
+type ProductWithStatus = Product & { isPending: boolean; isDeployedToThisAccount: boolean; };
+
 interface ProductDetailViewProps {
     account: Account;
     allAccounts: Account[]; // Receive the full list of accounts
@@ -56,8 +58,10 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     handleAiAnalysis,
     aiAnalysisResult,
 }) => {
-    const [sortedProducts, setSortedProducts] = useState<Product[]>([]);
-    const [sortOrder, setSortOrder] = useState('newest'); // 'newest', 'pendingFirst'
+    const [otherProducts, setOtherProducts] = useState<ProductWithStatus[]>([]);
+    const [deployedProducts, setDeployedProducts] = useState<ProductWithStatus[]>([]);
+    const [isDeployedSectionExpanded, setIsDeployedSectionExpanded] = useState(false);
+    const [sortOrder, setSortOrder] = useState('pendingFirst'); // 'newest', 'pendingFirst'
     const [searchQuery, setSearchQuery] = useState('');
     
     // --- New State for Editable Business Description ---
@@ -107,40 +111,44 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             return idMatch || keywordMatch || originalContentMatch || modifiedContentMatch || aiKeywordsMatch;
         });
 
-        // 2. Add status flags to filtered products
-        const productsWithStatus = filteredProducts.map(p => ({
-            ...p,
-            isPending: (account['待上架'] || []).some(item => {
+        // 2. Separate products into "deployed" and "others"
+        const deployed: ProductWithStatus[] = [];
+        const others: ProductWithStatus[] = [];
+
+        filteredProducts.forEach(p => {
+            const isDeployedToThisAccount = deployedToThisAccountIds.has(String(p.id));
+            const isPending = (account['待上架'] || []).some(item => {
                 const id = typeof item === 'object' && item !== null ? (item as {id: string | number}).id : item;
                 return String(id) === String(p.id);
-            }),
-            isDeployedToThisAccount: deployedToThisAccountIds.has(String(p.id))
-        }));
+            });
 
-        const sorted = [...productsWithStatus];
+            const productWithStatus: ProductWithStatus = { ...p, isPending, isDeployedToThisAccount };
 
+            if (isDeployedToThisAccount) {
+                deployed.push(productWithStatus);
+            } else {
+                others.push(productWithStatus);
+            }
+        });
+
+        // 3. Sort the "others" list based on the selected sort order
+        const sortedOthers = [...others];
         if (sortOrder === 'pendingFirst') {
-            sorted.sort((a, b) => {
-                // Level 0 check: Pending status
+            sortedOthers.sort((a, b) => {
                 if (a.isPending !== b.isPending) {
                     return a.isPending ? -1 : 1;
                 }
-
-                // If both are NOT pending, then check deployment status (Level 1)
-                if (!a.isPending) {
-                    if (a.isDeployedToThisAccount !== b.isDeployedToThisAccount) {
-                        return a.isDeployedToThisAccount ? -1 : 1;
-                    }
-                }
-
-                // If they are in the same priority group (both pending, or both deployed, or both neither), sort by date
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
             });
         } else { // Default to 'newest'
-             sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+             sortedOthers.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         }
 
-        setSortedProducts(sorted);
+        // 4. Sort the "deployed" list (e.g., by newest first)
+        deployed.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        setDeployedProducts(deployed);
+        setOtherProducts(sortedOthers);
 
     }, [products, sortOrder, account, searchQuery]);
 
@@ -192,15 +200,75 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                         className="bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold py-1.5 px-3 rounded-md flex items-center gap-1.5"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                           <path d="M10 2a.75.75 0 01.75.75v.008l.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008c.026.108.064.21.11.308l.004.008.004.008.004.008.004.008.004.008a4.92 4.92 0 011.082 1.348l.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008a4.92 4.92 0 01.794 1.822l.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008a4.92 4.92 0 010 3.868l-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008a4.92 4.92 0 01-.794 1.822l-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008a4.92 4.92 0 01-1.082 1.348l-.004.008-.004.008-.004.008-.004.008-.004.008c-.046.098-.084.2-.11.308l-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008c-.026-.108-.064-.21-.11-.308l-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008a4.92 4.92 0 01-1.082-1.348l-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008a4.92 4.92 0 01-.794-1.822l-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008a4.92 4.92 0 010-3.868l.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008a4.92 4.92 0 01.794-1.822l.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008a4.92 4.92 0 011.082-1.348l.004-.008.004-.008.004-.008.004-.008.004-.008c.046-.098.084-.2.11-.308l.004-.008.004-.008-.004-.008-.004-.008-.004-.008-.004-.008.004-.008A.75.75 0 0110 2zM10 7a1 1 0 100-2 1 1 0 000 2zm0 1a1 1 0 100 2 1 1 0 000-2zm-1.25 5.25a.75.75 0 00-1.5 0v.5a.75.75 0 001.5 0v-.5z" />
+                           <path d="M10 2a.75.75 0 01.75.75v.008l.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008c.026.108.064.21.11.308l.004.008.004.008.004.008.004.008.004.008a4.92 4.92 0 011.082 1.348l.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008a4.92 4.92 0 01.794 1.822l.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008a4.92 4.92 0 010 3.868l-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008a4.92 4.92 0 01-.794 1.822l-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008a4.92 4.92 0 01-1.082 1.348l-.004.008-.004.008-.004.008-.004.008-.004.008c-.046.098-.084.2-.11.308l-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008-.004.008.004.008.004.008.004.008.004.008.004.008.004.008.004.008c-.026-.108-.064-.21-.11-.308l-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008a4.92 4.92 0 01-1.082-1.348l-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008a4.92 4.92 0 01-.794-1.822l-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008-.004-.008a4.92 4.92 0 010-3.868l.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008a4.92 4.92 0 01.794-1.822l.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008.004-.008a4.92 4.92 0 011.082-1.348l.004-.008.004-.008.004-.008.004-.008.004-.008c.046-.098.084-.2.11-.308l.004-.008.004-.008-.004-.008-.004-.008-.004-.008-.004-.008.004-.008A.75.75 0 0110 2zM10 7a1 1 0 100-2 1 1 0 000 2zm0 1a1 1 0 100 2zm-1.25 5.25a.75.75 0 00-1.5 0v.5a.75.75 0 001.5 0v-.5z" />
                         </svg>
                         {isAiAnalyzing ? '分析中' : `AI分析`}
                     </button>
                 </div>
             </div>
 
+            {/* Collapsible Deployed Products Section */}
+            <div className="mb-6 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                <button
+                    onClick={() => setIsDeployedSectionExpanded(!isDeployedSectionExpanded)}
+                    className="w-full flex justify-between items-center p-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                >
+                    <div className="flex items-center gap-3">
+                        <span className="font-semibold text-lg text-gray-800 dark:text-gray-200">已投放商品</span>
+                        <span className="bg-green-200 text-green-800 text-sm font-bold px-2.5 py-0.5 rounded-full">
+                            {deployedProducts.length}
+                        </span>
+                    </div>
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className={`h-6 w-6 text-gray-600 dark:text-gray-400 transform transition-transform ${isDeployedSectionExpanded ? 'rotate-180' : ''}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                    >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                </button>
+
+                {isDeployedSectionExpanded && (
+                    <div className="p-4 bg-white dark:bg-gray-800/50">
+                        {deployedProducts.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+                                {deployedProducts.map((product) => {
+                                    const deployedToAccounts = allAccounts
+                                        .filter(acc => (acc['已上架json'] || []).some(item => String(item.id) === String(product.id)))
+                                        .map(acc => acc.name);
+
+                                    return (
+                                        <ProductCard
+                                            key={`deployed-${product.id}`}
+                                            product={product}
+                                            onDelete={onDeleteProduct}
+                                            onDuplicate={onDuplicateProduct}
+                                            onDeploy={onDeployProduct}
+                                            onUpdate={onUpdateProducts}
+                                            callAi={callAi}
+                                            accountName={account.name}
+                                            onSaveKeywords={onSaveKeywordsToAccount}
+                                            onDeleteKeywordFromLibrary={onDeleteKeywordFromAccountLibrary}
+                                            customCopywritingPrompt={account['文案生成prompt'] || ''}
+                                            businessDescription={account['业务描述'] || ''}
+                                            onManageAccountKeywords={() => onManageAccountKeywords(account)}
+                                            deployedTo={deployedToAccounts}
+                                            isPending={false} // Already deployed, so not pending
+                                        />
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <p className="text-center text-gray-500 py-4">该账号没有已投放的商品。</p>
+                        )}
+                    </div>
+                )}
+            </div>
+
             <div className="flex justify-between items-center mb-4">
-                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">商品列表 ({sortedProducts.length})</h3>
+                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">商品列表 ({otherProducts.length})</h3>
                 <div className="flex items-center gap-4">
                     <input
                         type="text"
@@ -275,7 +343,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
             {!loading && !error && (
                 <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-                    {sortedProducts.map((product) => {
+                    {otherProducts.map((product) => {
                         // Correctly find all accounts where this product has been deployed
                         const deployedToAccounts = allAccounts
                             .filter(acc => 
