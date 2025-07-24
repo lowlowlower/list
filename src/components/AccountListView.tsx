@@ -1,11 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import Image from 'next/image';
 import TagList from '@/components/TagList';
 import type { Account } from '@/types';
+import DeploymentHistoryModal from './DeploymentHistoryModal'; // Import the new modal
 
+type DeployedItem = { id: string | number; '上架时间': string };
 interface AccountListViewProps {
     accounts: Account[];
     loading: boolean;
@@ -47,6 +49,17 @@ const AccountListView: React.FC<AccountListViewProps> = ({
     newXianyuAccount, setNewXianyuAccount, newPhoneModel, setNewPhoneModel, isAddingAccount, onConfirmAddAccount,
     isAiAddAccountModalOpen, closeAiAddAccountModal, aiBatchInput, setAiBatchInput, isAiAddingAccounts, onConfirmAiAddAccounts
 }) => {
+    // State for the new deployment history modal
+    const [historyModalData, setHistoryModalData] = useState<{ accountName: string; items: DeployedItem[] } | null>(null);
+
+    const handleShowAllHistory = (accountName: string, items: DeployedItem[]) => {
+        setHistoryModalData({ accountName, items });
+    };
+
+    const handleCloseHistoryModal = () => {
+        setHistoryModalData(null);
+    };
+
     return (
         <div className="p-5 font-sans bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
             <div className="flex justify-between items-center mb-6">
@@ -80,7 +93,7 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                             <div
                                 {...provided.droppableProps}
                                 ref={provided.innerRef}
-                                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
+                                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5"
                             >
                                 {accounts.map((account, index) => (
                                     <Draggable key={account.name} draggableId={account.name} index={index}>
@@ -90,18 +103,22 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                 {...provided.draggableProps}
                                                 className={`border rounded-lg bg-white dark:bg-gray-800 shadow-md flex flex-col gap-3 group/account transition-shadow ${snapshot.isDragging ? 'shadow-2xl ring-2 ring-purple-500' : 'shadow-md'}`}
                                             >
-                                                <div className="flex items-center p-4 border-b dark:border-gray-700">
+                                                <div 
+                                                    className="flex items-center p-4 border-b dark:border-gray-700 cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                                                    onClick={() => onAccountSelect(account)}
+                                                >
                                                     <div
                                                         {...provided.dragHandleProps}
                                                         className="cursor-grab p-2 mr-3 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
                                                         title="拖拽排序"
+                                                        onClick={(e) => e.stopPropagation()}
                                                     >
                                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                                                             <path d="M5 4a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm6-12a1 1 0 00-2 0v2a1 1 0 002 0V4zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2zm0 6a1 1 0 00-2 0v2a1 1 0 002 0v-2z" />
                                                         </svg>
                                                     </div>
-                                                    <div className="flex-grow" onClick={() => onAccountSelect(account)}>
-                                                        <div className="flex items-center gap-3 cursor-pointer">
+                                                    <div className="flex-grow">
+                                                        <div className="flex items-center gap-3">
                                                             {account['xhs_头像'] ? (
                                                                 <div className="relative w-12 h-12 rounded-full overflow-hidden border-2 border-pink-400 flex-shrink-0">
                                                                     <Image
@@ -132,7 +149,7 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                         {deletingAccount === account.name ? "..." : <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>}
                                                     </button>
                                                 </div>
-                                                <div className="px-4 pb-4 flex flex-col gap-3" onClick={() => onAccountSelect(account)}>
+                                                <div className="px-4 pb-4 flex flex-col gap-3">
                                                     <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400">
                                                         <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
                                                         <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
@@ -219,11 +236,12 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                         <div>
                                                             <TagList
                                                                 title="已上架"
-                                                                items={account['已上架']}
+                                                                items={account['已上架json'] || []}
                                                                 color="green"
                                                                 accountName={account.name}
                                                                 arrayKey='已上架'
                                                                 onDeleteItem={onDeleteItemFromArray}
+                                                                onShowAllClick={handleShowAllHistory}
                                                             />
                                                         </div>
                                                     </div>
@@ -250,6 +268,13 @@ const AccountListView: React.FC<AccountListViewProps> = ({
             {!loading && !error && accounts.length === 0 && (
                 <div className="text-center p-5 text-gray-500">没有找到任何账号。</div>
             )}
+
+            <DeploymentHistoryModal 
+                isOpen={!!historyModalData}
+                onClose={handleCloseHistoryModal}
+                accountName={historyModalData?.accountName || ''}
+                items={historyModalData?.items || []}
+            />
 
             {isAddAccountModalOpen && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">

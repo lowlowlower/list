@@ -214,7 +214,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                         onChange={handleSortChange}
                         className="text-sm bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md p-2"
                     >
-                        <option value="newest">最新发布优先</option>
+                        <option value="newest">最新商品优先</option>
                         <option value="pendingFirst">待上架优先</option>
                     </select>
                 </div>
