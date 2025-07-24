@@ -219,22 +219,26 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         }
     };
 
-    const handleExternalSearch = (engine: 'yandex' | 'bing') => {
+    const handleExternalSearch = (engine: 'yandex' | 'bing' | 'google') => {
         if (imageSearchKeyword.trim()) {
             // Keyword search
             const query = encodeURIComponent(imageSearchKeyword.trim());
             if (engine === 'yandex') {
                 window.open(`https://yandex.com/images/search?text=${query}`, '_blank');
-            } else {
+            } else if (engine === 'bing') {
                 window.open(`https://www.bing.com/images/search?q=${query}`, '_blank');
+            } else if (engine === 'google') {
+                window.open(`https://www.google.com/search?tbm=isch&q=${query}`, '_blank');
             }
         } else if (imageUrl) {
             // Reverse image search
             const url = encodeURIComponent(imageUrl);
             if (engine === 'yandex') {
                 window.open(`https://yandex.com/images/search?rpt=imageview&url=${url}`, '_blank');
-            } else {
+            } else if (engine === 'bing') {
                 window.open(`https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:${url}`, '_blank');
+            } else if (engine === 'google') {
+                window.open(`https://lens.google.com/uploadbyurl?url=${url}`, '_blank');
             }
         }
     };
@@ -553,6 +557,13 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         <p className="whitespace-pre-wrap">如果下方输入框有关键词，将使用关键词搜索；否则使用当前图片进行反向搜图。</p>
                     </div>
                 </div>
+                <div className="relative flex-1 group/tooltip">
+                    <button onClick={() => handleExternalSearch('google')} disabled={!imageUrl && !imageSearchKeyword.trim()} className="w-full text-xs bg-green-500 hover:bg-green-600 text-white py-1 rounded-md disabled:opacity-50">搜图(Google)</button>
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
+                        <p className="font-bold border-b pb-1 mb-1">提示:</p>
+                        <p className="whitespace-pre-wrap">如果下方输入框有关键词，将使用关键词搜索；否则使用当前图片进行反向搜图。</p>
+                    </div>
+                </div>
                  <div className="relative flex-1 group/tooltip">
                     <button onClick={searchOnXianyu} className="w-full text-xs bg-orange-500 hover:bg-orange-600 text-white py-1 rounded-md">搜闲鱼</button>
                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
@@ -560,7 +571,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
                     </div>
                 </div>
-                 </div>
+            </div>
             {product.product_url && (
                 <a
                     href={product.product_url}
