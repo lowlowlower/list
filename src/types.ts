@@ -49,8 +49,35 @@ export type Product = {
     '建议投放账号': string | null;
     '上架时间': string | null;
   keywords_extracted_at?: string | null;
+  product_url?: string | null; // The URL for the product on Xianyu
   isPending?: boolean; // Add isPending to the product type
   isDeployedToThisAccount?: boolean; // Temporary flag for sorting
+};
+
+export type StatsHistoryItem = {
+    likes: number;
+    saves: number;
+    views: number;
+    shares: number;
+    comments: number;
+    crawled_at: string;
+};
+
+export type PublishedNote = {
+    note_id: string;
+    account_name: string | null;
+    note_url: string | null;
+    title: string | null;
+    published_at: string | null;
+    image_url: string | null;
+    views: number | null;
+    comments: number | null;
+    likes: number | null;
+    saves: number | null;
+    shares: number | null;
+    last_crawled_at: string | null;
+    created_at: string;
+    stats_history: StatsHistoryItem[] | null;
 };
 
 export type ProductSchedule = {

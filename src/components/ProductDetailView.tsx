@@ -2,9 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import ProductCard from '@/components/ProductCard';
-import type { Account, Product } from '@/types';
+import type { Account, Product, PublishedNote } from '@/types';
 
-type ProductWithStatus = Product & { isPending: boolean; isDeployedToThisAccount: boolean; };
+type ProductWithStatus = Product & {
+    isPending: boolean;
+    isDeployedToThisAccount: boolean;
+    noteStats?: PublishedNote | null; // <-- Add noteStats here
+};
 
 interface ProductDetailViewProps {
     account: Account;
@@ -63,6 +67,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     const [isDeployedSectionExpanded, setIsDeployedSectionExpanded] = useState(false);
     const [sortOrder, setSortOrder] = useState('pendingFirst'); // 'newest', 'pendingFirst'
     const [searchQuery, setSearchQuery] = useState('');
+    const [noteStats, setNoteStats] = useState<PublishedNote[]>([]); // New state for note stats
     
     // --- New State for Editable Business Description ---
     const [businessDescription, setBusinessDescription] = useState(account['业务描述'] || '');
@@ -85,6 +90,27 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             setIsSavingDescription(false);
         }
     };
+
+    // --- Fetch Note Stats ---
+    useEffect(() => {
+        const fetchNoteStats = async () => {
+            if (!account.name) return;
+            try {
+                const response = await fetch(`/api/get-note-stats?account_name=${encodeURIComponent(account.name)}`);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch note stats: ${response.statusText}`);
+                }
+                const data: PublishedNote[] = await response.json();
+                setNoteStats(data);
+            } catch (err) {
+                console.error(err);
+                // Optionally set an error state to show in the UI
+            }
+        };
+
+        fetchNoteStats();
+    }, [account.name]);
+
 
     useEffect(() => {
         const deployedToThisAccountIds = new Set(
@@ -122,7 +148,19 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 return String(id) === String(p.id);
             });
 
-            const productWithStatus: ProductWithStatus = { ...p, isPending, isDeployedToThisAccount };
+            // --- Match product with note stats ---
+            const matchingNote = noteStats.find(note => {
+                const productTitle = p['修改后文案'] || p.result_text_content;
+                const noteTitle = note.title;
+                return productTitle && noteTitle && productTitle.startsWith(noteTitle);
+            });
+
+            const productWithStatus: ProductWithStatus = { 
+                ...p, 
+                isPending, 
+                isDeployedToThisAccount,
+                noteStats: matchingNote // Add stats to product object
+            };
 
             if (isDeployedToThisAccount) {
                 deployed.push(productWithStatus);
@@ -150,7 +188,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         setDeployedProducts(deployed);
         setOtherProducts(sortedOthers);
 
-    }, [products, sortOrder, account, searchQuery]);
+    }, [products, sortOrder, account, searchQuery, noteStats]);
 
     const handleSortChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         setSortOrder(e.target.value);
@@ -256,6 +294,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                                             onManageAccountKeywords={() => onManageAccountKeywords(account)}
                                             deployedTo={deployedToAccounts}
                                             isPending={false} // Already deployed, so not pending
+                                            noteStats={product.noteStats} // Pass stats to card
                                         />
                                     );
                                 })}
@@ -368,6 +407,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                                 onManageAccountKeywords={() => onManageAccountKeywords(account)}
                                 deployedTo={deployedToAccounts}
                                 isPending={!!product.isPending} // Use the pre-calculated flag
+                                noteStats={product.noteStats} // Pass stats to card
                             />
                         );
                     })}

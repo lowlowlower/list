@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import Image from 'next/image';
 import { useTranslation } from './TranslationProvider'; // Import the hook
+import type { PublishedNote } from '@/types'; // Import PublishedNote
+import StatsHistoryModal from './Modals/StatsHistoryModal'; // Import the modal
 
 // --- Types ---
 type Product = {
@@ -15,6 +17,7 @@ type Product = {
   '价格': string | null;
   'ai提取关键词': string | null;
   type: string | null;
+  product_url?: string | null;
   // Other fields are not directly used in this component but are part of the object
   keywords_extracted_at?: string | null;
 };
@@ -34,6 +37,7 @@ interface ProductCardProps {
     onManageAccountKeywords: () => void; // New prop for navigation
     deployedTo: string[]; // List of account names this product is already deployed to
     isPending: boolean;
+    noteStats?: PublishedNote | null; // <-- Add noteStats prop
 }
 
 // --- Environment Variables ---
@@ -69,7 +73,7 @@ const getRelativeTime = (isoString: string) => {
 };
 
 // --- Main Component ---
-const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicate, onDeploy, onUpdate, callAi, accountName, onSaveKeywords, onDeleteKeywordFromLibrary, customCopywritingPrompt, businessDescription, onManageAccountKeywords, deployedTo, isPending }) => {
+const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicate, onDeploy, onUpdate, callAi, accountName, onSaveKeywords, onDeleteKeywordFromLibrary, customCopywritingPrompt, businessDescription, onManageAccountKeywords, deployedTo, isPending, noteStats }) => {
     // Component State
     const { translate } = useTranslation(); // Use the hook to get the translate function
     const [modifiedDescription, setModifiedDescription] = useState(product['修改后文案'] || product.result_text_content || '');
@@ -95,6 +99,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
     const [imageSearchKeyword, setImageSearchKeyword] = useState('');
     const originalTextareaRef = useRef<HTMLTextAreaElement>(null);
     const modifiedTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const [isStatsModalOpen, setIsStatsModalOpen] = useState(false); // State for the new modal
 
     // New state for editable original description
     const [editableOriginalText, setEditableOriginalText] = useState(product.result_text_content || '');
@@ -556,6 +561,16 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                     </div>
                 </div>
                  </div>
+            {product.product_url && (
+                <a
+                    href={product.product_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full text-center text-xs bg-cyan-500 hover:bg-cyan-600 text-white py-2 rounded-md transition-colors mt-2 block"
+                >
+                    直达闲鱼链接
+                </a>
+            )}
             <div className="space-y-2 mt-2">
                 <div className="p-2 border rounded-md bg-gray-50 dark:bg-gray-800">
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">智能图片搜索</label>
@@ -683,6 +698,31 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         </div>
                     )}
                 </div>
+
+            {/* XHS Stats Section */}
+            {noteStats && (
+                <div className="border-t-2 border-dashed border-red-300 dark:border-red-700 mt-3 pt-3">
+                    <h4 className="text-sm font-semibold text-center mb-2 text-red-600 dark:text-red-400">小红书数据</h4>
+                    <div className="flex justify-around items-center text-center text-xs text-gray-700 dark:text-gray-300 mb-3">
+                        <div title="浏览量"><span className="font-bold text-lg">{noteStats.views ?? 0}</span><br/>👁️ 浏览</div>
+                        <div title="点赞数"><span className="font-bold text-lg">{noteStats.likes ?? 0}</span><br/>❤️ 点赞</div>
+                        <div title="收藏数"><span className="font-bold text-lg">{noteStats.saves ?? 0}</span><br/>⭐ 收藏</div>
+                        <div title="评论数"><span className="font-bold text-lg">{noteStats.comments ?? 0}</span><br/>💬 评论</div>
+                    </div>
+                    <div className="flex gap-2 mt-2">
+                        {noteStats.note_url && (
+                             <a href={noteStats.note_url} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-red-500 hover:bg-red-600 text-white text-sm py-1.5 rounded-md">
+                                原文链接
+                            </a>
+                        )}
+                        <button onClick={() => setIsStatsModalOpen(true)} className="flex-1 bg-gray-600 hover:bg-gray-700 text-white text-sm py-1.5 rounded-md">
+                            查看数据
+                        </button>
+                    </div>
+                </div>
+            )}
+
+
             {cardError && <p className="text-red-500 text-xs mt-2">{cardError}</p>}
             {isEditingModalOpen && (
                 <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4" onClick={() => setIsEditingModalOpen(false)}>
@@ -735,6 +775,11 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                     </div>
                 </div>
             )}
+            <StatsHistoryModal 
+                isOpen={isStatsModalOpen}
+                onClose={() => setIsStatsModalOpen(false)}
+                note={noteStats || null}
+            />
         </article>
     );
 };
