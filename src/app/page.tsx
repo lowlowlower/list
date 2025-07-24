@@ -6,7 +6,7 @@ import { DropResult } from '@hello-pangea/dnd';
 
 import SettingsModal from '@/components/SettingsModal';
 import KeywordManagementView from '@/components/KeywordManagementView';
-import type { Account, Product, AccountKeywords, KeywordSearchHistory, ScheduledProduct, AiGeneratedAccount } from '@/types';
+import type { Account, Product, AccountKeywords,  ScheduledProduct, AiGeneratedAccount } from '@/types';
 import ProductDetailView from '@/components/ProductDetailView';
 import AccountListView from '@/components/AccountListView';
 const supabaseUrl = 'https://urfibhtfqgffpanpsjds.supabase.co';
@@ -194,7 +194,6 @@ export default function AccountsPage() {
     const [keywordsForEditing, setKeywordsForEditing] = useState<AccountKeywords[]>([]);
     const [loadingKeywords, setLoadingKeywords] = useState<boolean>(false);
     const [errorKeywords, setErrorKeywords] = useState<string | null>(null);
-    const [keywordHistories, setKeywordHistories] = useState<KeywordSearchHistory[]>([]);
     const [isBatchGeneratingKeywords, setIsBatchGeneratingKeywords] = useState<boolean>(false);
 
 
@@ -437,28 +436,15 @@ export default function AccountsPage() {
         setLoadingKeywords(true);
         setErrorKeywords(null);
         setKeywordsForEditing([]);
-        setKeywordHistories([]);
         try {
             const { data, error } = await supabase
                 .from('important_keywords_本人')
-                .select('id, account_name, keyword')
+                .select('id, account_name, keyword, search_history')
                 .eq('account_name', accountName)
                 .order('id', { ascending: true });
             
             if (error) throw error;
-            setKeywordsForEditing(data);
-
-            if (data && data.length > 0) {
-                const keywordIds = data.map(kw => kw.id);
-                const { data: histories, error: historiesError } = await supabase
-                    .from('keyword_search_history')
-                    .select('*')
-                    .in('keyword_id', keywordIds)
-                    .order('created_at', { ascending: false });
-                
-                if (historiesError) throw historiesError;
-                setKeywordHistories(histories as KeywordSearchHistory[]);
-            }
+            setKeywordsForEditing(data as AccountKeywords[]);
 
         } catch(err: unknown) {
             setErrorKeywords(`加载关键词列表失败: ${getErrorMessage(err)}`);
@@ -489,6 +475,9 @@ export default function AccountsPage() {
             fetchProductSchedules();
         }
     }, [isAuthenticated, fetchAccounts, fetchProductSchedules]);
+
+
+    
 
 
     // --- Account Management ---
@@ -1144,7 +1133,7 @@ export default function AccountsPage() {
         setErrorKeywords(null);
     };
 
-   
+
     const handleSaveRule = async (accountName: string) => {
         setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: true } }));
         
@@ -1217,6 +1206,36 @@ export default function AccountsPage() {
         }
     };
 
+    const handleRedeployFailedProduct = async (accountName: string, productId: string) => {
+        const account = allAccounts.find(acc => acc.name === accountName);
+        if (!account) {
+            alert('错误：找不到当前账号的数据。');
+            return;
+        }
+
+        // Remove the specific scheduled item object and add the ID to the end of the queue
+        const newPendingList = (account['待上架'] || [])
+            .filter(item => {
+                const id = typeof item === 'object' && item !== null ? item.id : item;
+                return String(id) !== String(productId);
+            });
+        
+        newPendingList.push(productId);
+
+        try {
+            const { error } = await supabase
+                .from('accounts_duplicate')
+                .update({ '待上架': newPendingList, updated_at: new Date().toISOString() })
+                .eq('name', accountName);
+
+            if (error) throw error;
+
+            alert(`商品 #${productId} 已被重新加入待上架队列末尾。`);
+            await fetchAccounts(); // Refresh all data to ensure consistency
+        } catch (err) {
+            alert(`重新上架失败: ${getErrorMessage(err)}`);
+        }
+    };
 
     const handleAnalyzeTopProducts = async () => {
         if (analysisCount <= 0 || !selectedAccountForProducts) return;
@@ -1372,7 +1391,8 @@ ${aiBatchInput}
                         if (kw && kw.trim()) {
                             allNewKeywords.push({
                                 account_name: trimmedName,
-                                keyword: kw.trim()
+                                keyword: kw.trim(),
+                                search_history: [] // Add default empty history
                             });
                         }
                     });
@@ -1490,7 +1510,6 @@ ${aiBatchInput}
                 account={selectedAccountForKeywords}
                 onBack={handleBackFromKeywords}
                 keywords={keywordsForEditing}
-                histories={keywordHistories}
                 loading={loadingKeywords}
                 error={errorKeywords}
                 onKeywordTextChange={handleKeywordTextChange}
@@ -1553,6 +1572,7 @@ ${aiBatchInput}
                                             setEditingSchedule={setEditingSchedule}
                 onUpdateScheduleTime={handleUpdateScheduleTime}
                 onDeleteItemFromArray={handleDeleteItemFromArray}
+                onRedeploy={handleRedeployFailedProduct}
                 isAddAccountModalOpen={isAddAccountModalOpen}
                 closeAddAccountModal={() => {
                                     setIsAddAccountModalOpen(false);

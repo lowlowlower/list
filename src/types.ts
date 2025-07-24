@@ -17,6 +17,7 @@ export type AccountKeywords = {
     id: number; // <-- Add ID for editing/deleting
     account_name: string;
     keyword: string;
+    search_history: { count: number; timestamp: string }[] | null;
 };
 
 export type KeywordSearchHistory = {
@@ -49,6 +50,7 @@ export type Product = {
     '上架时间': string | null;
   keywords_extracted_at?: string | null;
   isPending?: boolean; // Add isPending to the product type
+  isDeployedToThisAccount?: boolean; // Temporary flag for sorting
 };
 
 export type ProductSchedule = {

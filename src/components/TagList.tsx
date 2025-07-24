@@ -10,6 +10,7 @@ const TagList: React.FC<{
     accountName: string;
     arrayKey: keyof Pick<Account, '待上架' | '已上架'>;
     onDeleteItem: (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, item: string) => void;
+    onRedeploy?: (accountName: string, productId: string) => Promise<void>;
     schedulePreview?: ScheduledProduct[] | null;
     layout?: 'horizontal' | 'vertical';
     deployedIds?: (string | number)[] | null;
@@ -17,7 +18,7 @@ const TagList: React.FC<{
     editingSchedule?: { accountName: string; id: string; newTime: string } | null;
     setEditingSchedule?: (editState: { accountName: string; id: string; newTime: string } | null) => void;
     onUpdateTime?: (accountName: string, itemId: string, newTime: string) => void;
-}> = ({ title, items, color, accountName, arrayKey, onDeleteItem, schedulePreview, layout = 'horizontal', deployedIds = [], editingSchedule, setEditingSchedule, onUpdateTime }) => {
+}> = ({ title, items, color, accountName, arrayKey, onDeleteItem, onRedeploy, schedulePreview, layout = 'horizontal', deployedIds = [], editingSchedule, setEditingSchedule, onUpdateTime }) => {
     const renderItems = () => {
         let displayItems = items;
         if (schedulePreview && schedulePreview.length > 0) {
@@ -91,9 +92,13 @@ const TagList: React.FC<{
             // Handle '待上架' scheduled items
             const scheduledItem = item as ScheduledProduct;
             const isDeployed = deployedIds?.some(id => String(id) === String(scheduledItem.id));
-            const displayTime = new Date(scheduledItem.scheduled_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+            const scheduledTime = new Date(scheduledItem.scheduled_at);
+            const isPastDue = new Date() > scheduledTime;
+            const hasFailed = isPastDue && !isDeployed;
+
+            const displayTime = scheduledTime.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
             
-            const itemColor = isDeployed ? 'green' : color;
+            const itemColor = isDeployed ? 'green' : (hasFailed ? 'red' : color);
             const isEditing = editingSchedule?.id === scheduledItem.id && editingSchedule?.accountName === accountName;
 
             if (isEditing) {
@@ -119,13 +124,29 @@ const TagList: React.FC<{
 
             return (
                 <div key={index} className={`w-full flex justify-between items-center px-2 py-1.5 rounded-md text-xs font-mono bg-${itemColor}-100 dark:bg-${itemColor}-900/50 text-${itemColor}-800 dark:text-${itemColor}-300 group/tag`}>
-                    <span><strong>ID: {scheduledItem.id}</strong> @ {displayTime}</span>
+                    <div className="flex flex-col">
+                        <span><strong>ID: {scheduledItem.id}</strong> @ {displayTime}</span>
+                        {hasFailed && <span className="font-sans font-bold text-xs mt-1">投放失败</span>}
+                    </div>
                     <div className="flex items-center gap-1.5 opacity-0 group-hover/tag:opacity-100 transition-opacity">
                         {isDeployed && (
                             <span className="font-sans font-bold text-xs pr-2">✅ 已上架</span>
                         )}
 
-                        {onUpdateTime && setEditingSchedule && (
+                        {hasFailed && onRedeploy && (
+                             <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRedeploy(accountName, String(scheduledItem.id));
+                                }}
+                                className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold py-1 px-2 rounded-md"
+                                title="将此商品重新加入待上架队列末尾"
+                            >
+                                重新上架
+                            </button>
+                        )}
+
+                        {onUpdateTime && setEditingSchedule && !hasFailed && (
                              <button
                                 onClick={(e) => {
                                     e.stopPropagation();

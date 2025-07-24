@@ -57,6 +57,9 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     aiAnalysisResult,
 }) => {
     const [sortedProducts, setSortedProducts] = useState<Product[]>([]);
+    const [sortOrder, setSortOrder] = useState('newest'); // 'newest', 'pendingFirst'
+    const [searchQuery, setSearchQuery] = useState('');
+    
     // --- New State for Editable Business Description ---
     const [businessDescription, setBusinessDescription] = useState(account['业务描述'] || '');
     const [isSavingDescription, setIsSavingDescription] = useState(false);
@@ -78,35 +81,72 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             setIsSavingDescription(false);
         }
     };
-    
+
     useEffect(() => {
-        if (products && account) {
-            // Step 1: Create a Set of pending product IDs from the account's '待上架' field.
-            const pendingIds = new Set<string>();
-            if (account.待上架) {
-                account.待上架.forEach(item => {
-                    // The item can be a string/number (old format) or an object {id: ...} (new format)
-                    const id = typeof item === 'object' && item !== null ? String(item.id) : String(item);
-                    pendingIds.add(id);
-                });
+        const deployedToThisAccountIds = new Set(
+            (account['已上架json'] || []).map(p => String(p.id))
+        );
+
+        // 1. Filter products based on search query
+        const filteredProducts = products.filter(p => {
+            const trimmedQuery = searchQuery.trim();
+            if (!trimmedQuery) {
+                return true;
             }
+            
+            // ID match (exact contains)
+            const idMatch = String(p.id).includes(trimmedQuery);
 
-            // Step 2: Map over products to add the `isPending` flag.
-            const productsWithStatus = products.map(p => ({
-                ...p,
-                isPending: pendingIds.has(String(p.id)),
-            }));
+            // Text fields match (case-insensitive)
+            const lowercasedQuery = trimmedQuery.toLowerCase();
+            const keywordMatch = p.keyword?.toLowerCase().includes(lowercasedQuery);
+            const originalContentMatch = p.result_text_content?.toLowerCase().includes(lowercasedQuery);
+            const modifiedContentMatch = p['修改后文案']?.toLowerCase().includes(lowercasedQuery);
+            const aiKeywordsMatch = p['ai提取关键词']?.toLowerCase().replace(/\n/g, ' ').includes(lowercasedQuery);
 
-            // Step 3: Sort the products. Pending products come first.
-            const sorted = productsWithStatus.sort((a, b) => {
-                if (a.isPending && !b.isPending) return -1;
-                if (!a.isPending && b.isPending) return 1;
+            return idMatch || keywordMatch || originalContentMatch || modifiedContentMatch || aiKeywordsMatch;
+        });
+
+        // 2. Add status flags to filtered products
+        const productsWithStatus = filteredProducts.map(p => ({
+            ...p,
+            isPending: (account['待上架'] || []).some(item => {
+                const id = typeof item === 'object' && item !== null ? (item as {id: string | number}).id : item;
+                return String(id) === String(p.id);
+            }),
+            isDeployedToThisAccount: deployedToThisAccountIds.has(String(p.id))
+        }));
+
+        const sorted = [...productsWithStatus];
+
+        if (sortOrder === 'pendingFirst') {
+            sorted.sort((a, b) => {
+                // Level 0 check: Pending status
+                if (a.isPending !== b.isPending) {
+                    return a.isPending ? -1 : 1;
+                }
+
+                // If both are NOT pending, then check deployment status (Level 1)
+                if (!a.isPending) {
+                    if (a.isDeployedToThisAccount !== b.isDeployedToThisAccount) {
+                        return a.isDeployedToThisAccount ? -1 : 1;
+                    }
+                }
+
+                // If they are in the same priority group (both pending, or both deployed, or both neither), sort by date
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
             });
-
-            setSortedProducts(sorted);
+        } else { // Default to 'newest'
+             sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         }
-    }, [products, account]); // Depend on both products and account
+
+        setSortedProducts(sorted);
+
+    }, [products, sortOrder, account, searchQuery]);
+
+    const handleSortChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        setSortOrder(e.target.value);
+    };
 
     if (loading) return <div className="p-8 text-center">正在加载商品...</div>;
     if (error) return <div className="p-8 text-center text-red-500">加载商品失败: {error}</div>;
@@ -160,14 +200,22 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             </div>
 
             <div className="flex justify-between items-center mb-4">
-                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{account.name} - 商品列表 ({products.length})</h3>
+                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">商品列表 ({sortedProducts.length})</h3>
                 <div className="flex items-center gap-4">
+                    <input
+                        type="text"
+                        placeholder="搜索商品ID、关键词、文案..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-64 p-2 border rounded-md text-sm bg-white dark:bg-gray-800 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500"
+                    />
                     <select
+                        value={sortOrder}
+                        onChange={handleSortChange}
                         className="text-sm bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md p-2"
                     >
-                        <option value="all">全部</option>
-                        <option value="pending">待上架</option>
-                        <option value="deployed">已上架</option>
+                        <option value="newest">最新发布优先</option>
+                        <option value="pendingFirst">待上架优先</option>
                     </select>
                 </div>
             </div>
@@ -251,7 +299,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                                 businessDescription={account['业务描述'] || ''}
                                 onManageAccountKeywords={() => onManageAccountKeywords(account)}
                                 deployedTo={deployedToAccounts}
-                                isPending={!!product.isPending} // Ensure boolean
+                                isPending={!!product.isPending} // Use the pre-calculated flag
                             />
                         );
                     })}

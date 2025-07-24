@@ -22,6 +22,7 @@ interface AccountListViewProps {
     setEditingSchedule: (editState: { accountName: string; id: string; newTime: string } | null) => void;
     onUpdateScheduleTime: (accountName: string, itemId: string, newTime: string) => void;
     onDeleteItemFromArray: (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, item: string) => void;
+    onRedeploy: (accountName: string, productId: string) => Promise<void>;
     // Modals and their state can be passed as props, or handled via children, passing props is simpler for now
     isAddAccountModalOpen: boolean;
     closeAddAccountModal: () => void;
@@ -41,14 +42,14 @@ interface AccountListViewProps {
 const AccountListView: React.FC<AccountListViewProps> = ({
     accounts, loading, error, deletingAccount, onDragEnd, onAccountSelect, onDeleteAccount, onSettingsClick,
     onOpenAddAccountModal, onOpenAiAddAccountModal,
-    editingSchedule, setEditingSchedule, onUpdateScheduleTime, onDeleteItemFromArray,
+    editingSchedule, setEditingSchedule, onUpdateScheduleTime, onDeleteItemFromArray, onRedeploy,
     isAddAccountModalOpen, closeAddAccountModal, newAccountName, setNewAccountName, newXhsAccount, setNewXhsAccount,
     newXianyuAccount, setNewXianyuAccount, newPhoneModel, setNewPhoneModel, isAddingAccount, onConfirmAddAccount,
     isAiAddAccountModalOpen, closeAiAddAccountModal, aiBatchInput, setAiBatchInput, isAiAddingAccounts, onConfirmAiAddAccounts
 }) => {
     return (
         <div className="p-5 font-sans bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen">
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-center mb-6">
                 <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">账号管理</h1>
                 <div className="flex items-center gap-2">
                     <button
@@ -135,22 +136,67 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                     <div className="text-xs space-y-1 text-gray-600 dark:text-gray-400">
                                                         <p><strong className="font-semibold text-gray-700 dark:text-gray-300">闲鱼:</strong> {account['闲鱼账号'] || 'N/A'}</p>
                                                         <p><strong className="font-semibold text-gray-700 dark:text-gray-300">手机:</strong> {account['手机型号'] || 'N/A'}</p>
-                                                        <div className="mt-2 flex flex-wrap gap-2">
-                                                            <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
-                                                                今日新增商品: {account.today_new_products}
-                                                            </span>
-                                                            <span className="inline-block bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-green-200 dark:text-green-800">
-                                                                今日已上架: {
-                                                                    (account['已上架json'] || []).filter((item) => {
-                                                                        if (!item['上架时间']) return false;
-                                                                        const itemDate = new Date(item['上架时间']);
+                                                        <div className="mt-2 flex flex-col gap-2">
+                                                            <div className="flex flex-wrap gap-2">
+                                                                <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-blue-200 dark:text-blue-800">
+                                                                    今日新增商品: {account.today_new_products}
+                                                                </span>
+                                                                <span className="inline-block bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded dark:bg-green-200 dark:text-green-800">
+                                                                    今日已上架: {
+                                                                        (account['已上架json'] || []).filter((item) => {
+                                                                            if (!item['上架时间']) return false;
+                                                                            const itemDate = new Date(item['上架时间']);
+                                                                            const today = new Date();
+                                                                            return itemDate.getDate() === today.getDate() &&
+                                                                                   itemDate.getMonth() === today.getMonth() &&
+                                                                                   itemDate.getFullYear() === today.getFullYear();
+                                                                        }).length
+                                                                    }
+                                                                </span>
+                                                            </div>
+                                                            
+                                                            {/* Deployment History Tags */}
+                                                            <div className="flex flex-wrap gap-1.5 items-center">
+                                                                 <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">近期上架:</span>
+                                                                {(() => {
+                                                                    const stats: { [key: string]: number } = {};
+                                                                    (account['已上架json'] || []).forEach(item => {
+                                                                        if (item && item['上架时间']) {
+                                                                            const date = new Date(item['上架时间']).toISOString().split('T')[0];
+                                                                            stats[date] = (stats[date] || 0) + 1;
+                                                                        }
+                                                                    });
+                                                                    const sortedStats = Object.entries(stats)
+                                                                        .map(([date, count]) => ({ date, count }))
+                                                                        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                                                                    
+                                                                    if (sortedStats.length === 0) {
+                                                                        return <span className="text-xs text-gray-400">无记录</span>;
+                                                                    }
+
+                                                                    return sortedStats.slice(0, 5).map(({ date, count }) => {
+                                                                        const d = new Date(date);
                                                                         const today = new Date();
-                                                                        return itemDate.getDate() === today.getDate() &&
-                                                                               itemDate.getMonth() === today.getMonth() &&
-                                                                               itemDate.getFullYear() === today.getFullYear();
-                                                                    }).length
-                                                                }
-                                                            </span>
+                                                                        const yesterday = new Date(today);
+                                                                        yesterday.setDate(yesterday.getDate() - 1);
+                                                                        
+                                                                        let displayDate = '';
+                                                                        if (d.toDateString() === today.toDateString()) {
+                                                                            displayDate = '今天';
+                                                                        } else if (d.toDateString() === yesterday.toDateString()) {
+                                                                            displayDate = '昨天';
+                                                                        } else {
+                                                                            displayDate = d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+                                                                        }
+
+                                                                        return (
+                                                                            <span key={date} className="text-xs bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-0.5 rounded-full">
+                                                                                {displayDate}: <strong>{count}</strong>
+                                                                            </span>
+                                                                        );
+                                                                    });
+                                                                })()}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                     <div className="flex flex-col gap-3 mt-2 border-t dark:border-gray-700 pt-3">
@@ -162,8 +208,9 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                                 accountName={account.name}
                                                                 arrayKey='待上架'
                                                                 onDeleteItem={onDeleteItemFromArray}
+                                                                onRedeploy={onRedeploy}
                                                                 layout="vertical"
-                                                                deployedIds={(account['已上架json'] || []).map(item => item.id)}
+                                                                deployedIds={(account['已上架json'] || []).map(item => String(item.id))}
                                                                 editingSchedule={editingSchedule}
                                                                 setEditingSchedule={setEditingSchedule}
                                                                 onUpdateTime={onUpdateScheduleTime}

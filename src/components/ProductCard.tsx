@@ -96,10 +96,17 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
     const originalTextareaRef = useRef<HTMLTextAreaElement>(null);
     const modifiedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+    // New state for editable original description
+    const [editableOriginalText, setEditableOriginalText] = useState(product.result_text_content || '');
+    const [isOriginalDirty, setIsOriginalDirty] = useState(false);
+
+
     // Reset state if product prop changes
     useEffect(() => {
         setModifiedDescription(product['修改后文案'] || product.result_text_content || '');
+        setEditableOriginalText(product.result_text_content || ''); // Reset original text
         setIsDescriptionDirty(false);
+        setIsOriginalDirty(false); // Reset original text dirty flag
         setAiKeywords((product['ai提取关键词'] || '').split('\n').filter(Boolean));
         setSelectedKeywords(new Set());
         setImageUrl(product.result_image_url);
@@ -269,6 +276,12 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         autoResizeTextarea(e.target);
     };
 
+    const handleOriginalDescriptionChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setEditableOriginalText(e.target.value);
+        setIsOriginalDirty(true);
+        autoResizeTextarea(e.target);
+    };
+
     const handleGenerateImage = async () => {
         if (!modifiedDescription.trim()) {
             setCardError("文案为空，无法生成图片。");
@@ -405,13 +418,31 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
 
     const confirmChanges = async () => {
         if (!databaseUrl) return setCardError('Supabase配置不完整');
+        if (!isOriginalDirty && !isDescriptionDirty) {
+            setIsEditingModalOpen(false); // Just close if nothing changed
+            return;
+        }
+
         setIsLoadingConfirm(true);
         setCardError(null);
+
+        const payload: { [key: string]: string } = {};
+        if (isDescriptionDirty) {
+            payload['修改后文案'] = modifiedDescription;
+        }
+        if (isOriginalDirty) {
+            payload['result_text_content'] = editableOriginalText;
+        }
+
+
         try {
-            const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify({ "修改后文案": modifiedDescription }) });
+            const res = await fetch(`${databaseUrl}?id=eq.${product.id}`, { method: 'PATCH', headers: { 'apikey': supabaseAnonKey, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, body: JSON.stringify(payload) });
             if (!res.ok) throw new Error((await res.json()).message);
+
             setIsDescriptionDirty(false);
-            setHasSavedCopy(true); // Manually update save state
+            setIsOriginalDirty(false);
+            if (isDescriptionDirty) setHasSavedCopy(true);
+            
             setIsEditingModalOpen(false);
             onUpdate(); // Notify parent to refetch data to show the updated text on card.
         } catch (e) { setCardError(getErrorMessage(e)); } finally { setIsLoadingConfirm(false); }
@@ -662,8 +693,11 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         </div>
                         <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-4 overflow-y-auto">
                             <div>
-                                <label className="text-lg font-semibold mb-2">原始文案</label>
-                                <textarea ref={originalTextareaRef} readOnly value={product.result_text_content || ''} className="w-full p-2 border rounded bg-gray-100 dark:bg-gray-900 dark:border-gray-600 text-sm resize-none overflow-hidden" rows={1} />
+                                <div className="flex justify-between items-center mb-2">
+                                    <label className="text-lg font-semibold">原始文案</label>
+                                    {isOriginalDirty && <span className="text-sm text-yellow-600 dark:text-yellow-400 font-semibold">未保存</span>}
+                                </div>
+                                <textarea ref={originalTextareaRef} value={editableOriginalText} onChange={handleOriginalDescriptionChange} className="w-full p-2 border rounded bg-white dark:bg-gray-700 dark:border-gray-500 text-sm resize-none overflow-hidden" rows={1} />
                             </div>
                             <div>
                                 <div className="flex justify-between items-center mb-2">
@@ -694,7 +728,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                             <button onClick={modifyTextWithAI} disabled={isLoadingAI || isGeneratingImage} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
                                 {isLoadingAI ? '生成中...' : '🤖 AI 优化文案'}
                  </button>
-                            <button onClick={confirmChanges} disabled={isLoadingConfirm || !isDescriptionDirty} className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
+                            <button onClick={confirmChanges} disabled={isLoadingConfirm || (!isDescriptionDirty && !isOriginalDirty)} className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
                                 {isLoadingConfirm ? '保存中...' : '✅ 保存并关闭'}
                  </button>
                         </div>
