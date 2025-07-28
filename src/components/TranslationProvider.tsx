@@ -1,11 +1,42 @@
 'use client';
 
 import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect } from 'react';
-import { translateText } from '@/lib/ai';
+
+// The new translateText function is a client-side wrapper for our API endpoint.
+const translateText = async (
+    text: string,
+    sourceLanguage: string, // Kept for potential future use, but currently unused
+    targetLanguage: string,
+    promptTemplate?: string
+): Promise<string> => {
+    if (!text.trim()) {
+        return '';
+    }
+    try {
+        const response = await fetch('/api/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, targetLanguage, promptTemplate }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Translation failed');
+        }
+
+        return data.translatedText;
+    } catch (error) {
+        console.error("Translation API call failed:", error);
+        // Return the original text as a fallback
+        return `Translation Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+};
+
 
 // 1. Define the context shape
 interface TranslationContextType {
-    translate: (text: string, sourceLang?: string, targetLang?: string) => void;
+    translate: (text: string, sourceLang: string, targetLang: string) => Promise<void>;
 }
 
 // 2. Create the context
@@ -69,17 +100,24 @@ export const TranslationProvider = ({ children }: { children: ReactNode }) => {
         }
     };
 
-    const translate = useCallback((text: string, targetLang: string = 'English') => {
-        setIsWidgetVisible(true);
+    const translate = useCallback(async (text: string, sourceLang: string, targetLang: string) => {
+        setIsLoading(true);
         setOriginalText(text);
         setTranslatedText('');
         setError(null);
-        setIsLoading(true);
-
-        translateText(text, targetLang, customPrompt) // Use the custom prompt
-            .then(result => setTranslatedText(result))
-            .catch(err => setError(err instanceof Error ? err.message : 'An unknown error occurred.'))
-            .finally(() => setIsLoading(false));
+        try {
+            const result = await translateText(text, sourceLang, targetLang, customPrompt);
+            setTranslatedText(result);
+            // Copy to clipboard automatically
+            await navigator.clipboard.writeText(result);
+            alert('翻译成功，已复制到剪贴板！');
+        } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : String(e);
+            setError(`Translation failed: ${errorMessage}`);
+            alert(`翻译失败: ${errorMessage}`);
+        } finally {
+            setIsLoading(false);
+        }
     }, [customPrompt]); // Depend on customPrompt
 
     const value = { translate };

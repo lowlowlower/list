@@ -65,7 +65,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     const [otherProducts, setOtherProducts] = useState<ProductWithStatus[]>([]);
     const [deployedProducts, setDeployedProducts] = useState<ProductWithStatus[]>([]);
     const [isDeployedSectionExpanded, setIsDeployedSectionExpanded] = useState(false);
-    const [sortOrder, setSortOrder] = useState('pendingFirst'); // 'newest', 'pendingFirst'
+    const [sortOrder, setSortOrder] = useState('pendingFirst'); // 'newest', 'pendingFirst', 'aiGeneratedOnly'
     const [searchQuery, setSearchQuery] = useState('');
     const [noteStats, setNoteStats] = useState<PublishedNote[]>([]); // New state for note stats
     
@@ -182,11 +182,16 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
              sortedOthers.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         }
 
+        let finalOthers = sortedOthers;
+        if (sortOrder === 'aiGeneratedOnly') {
+            finalOthers = sortedOthers.filter(p => p.is_ai_generated);
+        }
+
         // 4. Sort the "deployed" list (e.g., by newest first)
         deployed.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
         setDeployedProducts(deployed);
-        setOtherProducts(sortedOthers);
+        setOtherProducts(finalOthers);
 
     }, [products, sortOrder, account, searchQuery, noteStats]);
 
@@ -323,6 +328,7 @@ const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                     >
                         <option value="newest">最新商品优先</option>
                         <option value="pendingFirst">待上架优先</option>
+                        <option value="aiGeneratedOnly">只看AI生成</option>
                     </select>
                 </div>
             </div>

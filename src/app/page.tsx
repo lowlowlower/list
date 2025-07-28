@@ -1474,6 +1474,39 @@ ${aiBatchInput}
         }
     };
 
+    const handleToggleAutomation = async (accountName: string, newStatus: boolean) => {
+        // Optimistic UI update
+        const originalAccounts = [...allAccounts];
+        setAllAccounts(prev => prev.map(acc => {
+            if (acc.name === accountName) {
+                const newRule = { ...(acc.scheduling_rule || { items_per_day: 0 }), enabled: newStatus };
+                return { ...acc, scheduling_rule: newRule };
+            }
+            return acc;
+        }));
+
+        try {
+            const response = await fetch('/api/update-automation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ accountName, newStatus }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to update automation status');
+            }
+            // Optional: You can refresh accounts from the server to be 100% sure,
+            // but the optimistic update should suffice.
+            // await fetchAccounts(); 
+
+        } catch (e) {
+            alert(`更新自动化状态失败: ${getErrorMessage(e)}`);
+            // Revert UI on failure
+            setAllAccounts(originalAccounts);
+        }
+    };
+
     // --- RENDER LOGIC ---
 
     // Render Password Lock View
@@ -1573,6 +1606,7 @@ ${aiBatchInput}
                 onUpdateScheduleTime={handleUpdateScheduleTime}
                 onDeleteItemFromArray={handleDeleteItemFromArray}
                 onRedeploy={handleRedeployFailedProduct}
+                onToggleAutomation={handleToggleAutomation}
                 isAddAccountModalOpen={isAddAccountModalOpen}
                 closeAddAccountModal={() => {
                                     setIsAddAccountModalOpen(false);

@@ -1,91 +1,79 @@
-const GEMINI_API_KEY = "AIzaSyApuy_ax9jhGXpUdlgI6w_0H5aZ7XiY9vU";
-const DEEPSEEK_API_KEY = 'sk-78a9fd015e054281a3eb0a0712d5e6d0';
+'use server';
 
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
+import satori from 'satori';
+import { html } from 'satori-html';
+import sharp from 'sharp';
+import fs from 'fs/promises';
+import path from 'path';
+import { createClient } from '@supabase/supabase-js';
 
-const DEFAULT_TRANSLATION_PROMPT_TEMPLATE = `Translate the following text into {{targetLanguage}}.
-IMPORTANT: Respond with only the translated text, without any additional comments, formatting, or explanations.
+// --- Reusable Supabase Client ---
+// It's better to initialize this once and reuse it.
+const supabaseUrl = "https://urfibhtfqgffpanpsjds.supabase.co";
+const supabaseServiceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyZmliaHRmcWdmZnBhbnBzamRzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NTY0NSwiZXhwIjoyMDUxMzYxNjQ1fQ.fHIeQZR1l_lGPV7hYJkcahkEvYytIBpasXOg4m1atAs";
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+const STORAGE_BUCKET_NAME = 'product-images';
 
-Text to translate:
----
-{{text}}
----`;
-
-/**
- * Translates a given text using a primary API (Gemini) and a fallback API (DeepSeek).
- * Allows for a custom prompt template.
- * @param text The text to translate.
- * @param targetLanguage The target language (e.g., "Chinese", "English").
- * @param promptTemplate A custom prompt template with {{text}} and {{targetLanguage}} placeholders.
- * @returns A promise that resolves to the translated text.
- */
-export const translateText = async (
-    text: string, 
-    targetLanguage: string = 'English',
-    promptTemplate: string = DEFAULT_TRANSLATION_PROMPT_TEMPLATE
-): Promise<string> => {
-
-    const prompt = promptTemplate
-        .replace('{{text}}', text)
-        .replace('{{targetLanguage}}', targetLanguage);
-
-    // 1. Try Gemini First
+// --- Reusable Font Loading ---
+let fontData: Buffer | null = null;
+async function getFontData() {
+    if (fontData) return fontData;
+    const fontPath = path.join(process.cwd(), 'src', 'lib', 'fonts', 'NotoSansSC-Regular.woff');
     try {
-        console.log("Attempting translation with Gemini...");
-        const response = await fetch(GEMINI_API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        fontData = await fs.readFile(fontPath);
+        return fontData;
+    } catch (error) {
+        console.error("Error reading local font file:", error);
+        throw new Error('Failed to load local font data for image generation.');
+    }
+}
+
+// --- CORE LOGIC: GENERATE IMAGE BUFFER ---
+export async function generateImageBufferFromText(text: string): Promise<Buffer> {
+    const font = await getFontData();
+    const template = html(`
+        <div style="display: flex; height: 100%; width: 100%; align-items: center; justify-content: center; background-image: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); font-family: 'Noto Sans SC'; padding: 60px; text-align: center; color: #333; line-height: 1.8; font-size: 48px; white-space: pre-wrap; word-wrap: break-word;">
+            ${text}
+        </div>
+    `);
+
+    const svg = await satori(template as React.ReactNode, {
+        width: 1080,
+        height: 1080,
+        fonts: [{
+            name: 'Noto Sans SC',
+            data: font,
+            weight: 400,
+            style: 'normal',
+        }],
+    });
+
+    return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+// --- CORE LOGIC: UPLOAD IMAGE TO SUPABASE ---
+export async function uploadImageToSupabase(imageBuffer: Buffer): Promise<string> {
+    const fileName = `generated-images/product-image-${Date.now()}.png`;
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+        .from(STORAGE_BUCKET_NAME)
+        .upload(fileName, imageBuffer, {
+            contentType: 'image/png',
+            cacheControl: '3600',
+            upsert: false,
         });
 
-        if (!response.ok) {
-            const errorBody = await response.json();
-            throw new Error(`API request failed with status ${response.status}: ${errorBody.error?.message || 'Unknown error'}`);
-        }
-
-        const data = await response.json();
-        const translatedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!translatedText) {
-            throw new Error("Failed to extract translated text from Gemini API response.");
-        }
-        console.log("Translation successful with Gemini.");
-        return translatedText.trim();
-
-    } catch (geminiError) {
-        console.warn(`Gemini translation failed: ${geminiError instanceof Error ? geminiError.message : String(geminiError)}`);
-        console.log("Falling back to DeepSeek for translation...");
-
-        // 2. Fallback to DeepSeek
-        try {
-            const response = await fetch(DEEPSEEK_API_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-                },
-                body: JSON.stringify({
-                    model: "deepseek-chat",
-                    messages: [{ role: "user", content: prompt }]
-                })
-            });
-             if (!response.ok) {
-                const errorBody = await response.json();
-                throw new Error(`API request failed with status ${response.status}: ${errorBody.error?.message || 'Unknown error'}`);
-            }
-            const data = await response.json();
-            const translatedText = data.choices?.[0]?.message?.content;
-
-            if (!translatedText) {
-                throw new Error("Failed to extract translated text from DeepSeek API response.");
-            }
-             console.log("Translation successful with DeepSeek.");
-            return translatedText.trim();
-
-        } catch (deepseekError) {
-            console.error(`DeepSeek translation also failed: ${deepseekError instanceof Error ? deepseekError.message : String(deepseekError)}`);
-            throw new Error(`Both translation APIs failed. Last error: ${deepseekError instanceof Error ? deepseekError.message : 'Unknown DeepSeek error'}`);
-        }
+    if (uploadError) {
+        console.error('Supabase Storage upload error:', uploadError);
+        throw new Error(`Failed to upload image to Supabase Storage. Details: ${uploadError.message}`);
     }
-}; 
+
+    const { data: publicUrlData } = supabaseAdmin.storage
+        .from(STORAGE_BUCKET_NAME)
+        .getPublicUrl(uploadData.path);
+
+    if (!publicUrlData || !publicUrlData.publicUrl) {
+        throw new Error('Could not retrieve public URL for the uploaded image.');
+    }
+
+    return publicUrlData.publicUrl;
+} 

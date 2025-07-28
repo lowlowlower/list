@@ -50,6 +50,7 @@ export type Product = {
     '上架时间': string | null;
   keywords_extracted_at?: string | null;
   product_url?: string | null; // The URL for the product on Xianyu
+  is_ai_generated?: boolean | null; // Flag for automation
   isPending?: boolean; // Add isPending to the product type
   isDeployedToThisAccount?: boolean; // Temporary flag for sorting
 };
@@ -80,6 +81,13 @@ export type PublishedNote = {
     stats_history: StatsHistoryItem[] | null;
 };
 
+export type AutomationRun = {
+    id: number;
+    account_name: string;
+    status: 'running' | 'error';
+    started_at: string;
+};
+
 export type ProductSchedule = {
     id: string; // UUID
   product_id: string; // Corrected type
@@ -103,7 +111,7 @@ export type Account = {
   '手机型号': string | null;
   'xhs_头像': string | null;
   keywords?: string | null;
-  scheduling_rule?: { items_per_day: number } | null;
+  scheduling_rule?: { enabled?: boolean; items_per_day: number } | null;
   todays_schedule?: ScheduledProduct[] | null;
   today_new_products?: number;
   isPending?: boolean;

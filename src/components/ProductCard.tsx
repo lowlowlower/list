@@ -18,6 +18,7 @@ type Product = {
   'ai提取关键词': string | null;
   type: string | null;
   product_url?: string | null;
+  is_ai_generated?: boolean | null;
   // Other fields are not directly used in this component but are part of the object
   keywords_extracted_at?: string | null;
 };
@@ -485,7 +486,12 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
         <article className="product-card border border-gray-300 dark:border-gray-700 rounded-lg shadow-md bg-white dark:bg-gray-800 flex flex-col gap-3 p-4 relative group">
             <div className="flex justify-between items-start">
                 <div className="text-sm pr-8">
-                    <div><strong>ID:</strong> {product.id} | <strong>价格:</strong> {product.价格 || 'N/A'}</div>
+                    <div className="flex items-center gap-2">
+                        <strong>ID:</strong> {product.id} | <strong>价格:</strong> {product.价格 || 'N/A'}
+                        {product.is_ai_generated && (
+                            <span title="此商品由AI自动化生成" className="text-purple-500">🤖</span>
+                        )}
+                    </div>
                     <div className="mt-2 flex items-center gap-2 flex-wrap">
                         {product.keyword && (
                             <span 
@@ -559,7 +565,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                 </div>
                 <div className="relative flex-1 group/tooltip">
                     <button onClick={() => handleExternalSearch('google')} disabled={!imageUrl && !imageSearchKeyword.trim()} className="w-full text-xs bg-green-500 hover:bg-green-600 text-white py-1 rounded-md disabled:opacity-50">搜图(Google)</button>
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
+                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none">
                         <p className="font-bold border-b pb-1 mb-1">提示:</p>
                         <p className="whitespace-pre-wrap">如果下方输入框有关键词，将使用关键词搜索；否则使用当前图片进行反向搜图。</p>
                     </div>
@@ -571,7 +577,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onDelete, onDuplicat
                         <p className="whitespace-pre-wrap">{product.result_text_content || '无'}</p>
                     </div>
                 </div>
-            </div>
+                 </div>
             {product.product_url && (
                 <a
                     href={product.product_url}

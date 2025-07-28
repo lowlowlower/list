@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import Image from 'next/image';
+import Switch from 'react-switch'; // Import the switch component
 import TagList from '@/components/TagList';
-import type { Account } from '@/types';
+import type { Account, AutomationRun } from '@/types';
 import DeploymentHistoryModal from './DeploymentHistoryModal'; // Import the new modal
+import AutomationLogModal from './Modals/AutomationLogModal'; // Import the log modal
 
 type DeployedItem = { id: string | number; '上架时间': string };
 interface AccountListViewProps {
@@ -25,6 +27,7 @@ interface AccountListViewProps {
     onUpdateScheduleTime: (accountName: string, itemId: string, newTime: string) => void;
     onDeleteItemFromArray: (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, item: string) => void;
     onRedeploy: (accountName: string, productId: string) => Promise<void>;
+    onToggleAutomation: (accountName: string, newStatus: boolean) => void; // New prop for toggling
     // Modals and their state can be passed as props, or handled via children, passing props is simpler for now
     isAddAccountModalOpen: boolean;
     closeAddAccountModal: () => void;
@@ -44,13 +47,32 @@ interface AccountListViewProps {
 const AccountListView: React.FC<AccountListViewProps> = ({
     accounts, loading, error, deletingAccount, onDragEnd, onAccountSelect, onDeleteAccount, onSettingsClick,
     onOpenAddAccountModal, onOpenAiAddAccountModal,
-    editingSchedule, setEditingSchedule, onUpdateScheduleTime, onDeleteItemFromArray, onRedeploy,
+    editingSchedule, setEditingSchedule, onUpdateScheduleTime, onDeleteItemFromArray, onRedeploy, onToggleAutomation,
     isAddAccountModalOpen, closeAddAccountModal, newAccountName, setNewAccountName, newXhsAccount, setNewXhsAccount,
     newXianyuAccount, setNewXianyuAccount, newPhoneModel, setNewPhoneModel, isAddingAccount, onConfirmAddAccount,
     isAiAddAccountModalOpen, closeAiAddAccountModal, aiBatchInput, setAiBatchInput, isAiAddingAccounts, onConfirmAiAddAccounts
 }) => {
     // State for the new deployment history modal
     const [historyModalData, setHistoryModalData] = useState<{ accountName: string; items: DeployedItem[] } | null>(null);
+    const [automationStatus, setAutomationStatus] = useState<AutomationRun[]>([]);
+    const [isLogModalOpen, setIsLogModalOpen] = useState(false); // State for the log modal
+
+    useEffect(() => {
+        const fetchStatus = async () => {
+            try {
+                const response = await fetch('/api/get-automation-status');
+                const data: AutomationRun[] = await response.json();
+                setAutomationStatus(data);
+            } catch (error) {
+                console.error("Failed to fetch automation status:", error);
+            }
+        };
+
+        fetchStatus(); // Fetch immediately on mount
+        const intervalId = setInterval(fetchStatus, 5000); // And then every 5 seconds
+
+        return () => clearInterval(intervalId); // Cleanup on unmount
+    }, []);
 
     const handleShowAllHistory = (accountName: string, items: DeployedItem[]) => {
         setHistoryModalData({ accountName, items });
@@ -65,6 +87,12 @@ const AccountListView: React.FC<AccountListViewProps> = ({
             <div className="flex justify-between items-center mb-6">
                 <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">账号管理</h1>
                 <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setIsLogModalOpen(true)}
+                        className="bg-gray-500 hover:bg-gray-600 text-white text-sm font-bold py-2 px-4 rounded"
+                    >
+                        📜 日志中心
+                    </button>
                     <button
                         onClick={onOpenAiAddAccountModal}
                         className="bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold py-2 px-4 rounded"
@@ -216,6 +244,33 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                             </div>
                                                         </div>
                                                     </div>
+                                                    <div className="border-t dark:border-gray-700 mt-2 pt-2 flex justify-between items-center text-sm">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-semibold text-gray-700 dark:text-gray-300">自动化上架</span>
+                                                            {automationStatus.find(run => run.account_name === account.name) && (
+                                                                <div className="flex items-center gap-1 text-xs text-blue-500 font-semibold" title={`任务开始于: ${new Date(automationStatus.find(run => run.account_name === account.name)!.started_at).toLocaleString()}`}>
+                                                                    <svg className="animate-spin h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                                    </svg>
+                                                                    处理中...
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <Switch
+                                                            onChange={(checked) => onToggleAutomation(account.name, checked)}
+                                                            checked={account.scheduling_rule?.enabled ?? false}
+                                                            onColor="#86d3ff"
+                                                            onHandleColor="#2693e6"
+                                                            handleDiameter={20}
+                                                            uncheckedIcon={false}
+                                                            checkedIcon={false}
+                                                            boxShadow="0px 1px 5px rgba(0, 0, 0, 0.6)"
+                                                            activeBoxShadow="0px 0px 1px 10px rgba(0, 0, 0, 0.2)"
+                                                            height={16}
+                                                            width={36}
+                                                        />
+                                                    </div>
                                                     <div className="flex flex-col gap-3 mt-2 border-t dark:border-gray-700 pt-3">
                                                         <div>
                                                             <TagList
@@ -275,6 +330,7 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                 accountName={historyModalData?.accountName || ''}
                 items={historyModalData?.items || []}
             />
+            <AutomationLogModal isOpen={isLogModalOpen} onClose={() => setIsLogModalOpen(false)} />
 
             {isAddAccountModalOpen && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
