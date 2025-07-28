@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { NextResponse } from 'next/server';
+import { type NextRequest, NextResponse } from 'next/server';
 import { generateImageBufferFromText, uploadImageToSupabase } from '@/lib/ai';
 import type { ScheduledProduct } from '@/types';
 
@@ -54,7 +54,12 @@ async function generateAndUploadImage(text: string): Promise<string> {
     return publicUrl;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const authHeader = request.headers.get('authorization');
+  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   await log('INFO', 'Cron job started.');
 
   try {
@@ -109,7 +114,9 @@ export async function GET() {
             
             const originalContent = newestProduct.result_text_content || '';
             const copywritingPrompt = account['文案生成prompt'] || 'Make this text better.';
-            const aiModifiedText = await callAIApi(`${copywritingPrompt}\n\n[Original Text]:\n${originalContent}`);
+            const aiModifiedTextRaw = await callAIApi(`${copywritingPrompt}\n\n[Original Text]:\n${originalContent}`);
+            const aiModifiedText = aiModifiedTextRaw.replace(/[*#]/g, '').trim();
+            
             const newImageUrl = await generateAndUploadImage(aiModifiedText);
             
             await supabase.from('search_results_duplicate_本人').update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true }).eq('id', newestProduct.id);
