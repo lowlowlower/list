@@ -80,23 +80,25 @@ export async function GET(request: NextRequest) {
       }
 
       try {
-        const pendingQueue = (account['待上架'] || []).filter(item => item && typeof item === 'object' && item.id && item.scheduled_at);
-
-        if (pendingQueue.length > 0) {
-            await log('INFO', `Account already has an item in the pending queue. Skipping.`, {
-                account_name: account.name,
-                queue_size: pendingQueue.length,
-                next_item_id: pendingQueue[0].id,
-                next_item_time: pendingQueue[0].scheduled_at
-            });
-            continue;
-        }
-
-        await log('INFO', `Pending queue is empty. Starting product processing.`, { account_name: account.name });
+        const pendingQueue = (account['待上架'] || []) as ScheduledProduct[];
         
+        // Find the first placeholder in the queue
+        const placeholderIndex = pendingQueue.findIndex(item => item && item.isPlaceholder);
+
+        if (placeholderIndex === -1) {
+            await log('INFO', `No placeholder found in the pending queue. The schedule is full. Skipping.`, {
+                account_name: account.name,
+            });
+            continue; // Skip if no placeholder
+        }
+        
+        const placeholderItem = pendingQueue[placeholderIndex];
+        await log('INFO', `Found placeholder. Attempting to fill slot for time: ${placeholderItem.scheduled_at}`, { account_name: account.name });
+
+        // IMPORTANT: We now only consider REAL products in the "used" set. Placeholders don't count.
         const usedProductIds = new Set<string>();
         accounts.forEach((acc: AutomationAccount & { '已上架json': ScheduledProduct[] | null }) => {
-            (acc['待上架'] || []).forEach(item => { if (item?.id) usedProductIds.add(String(item.id)); });
+            (acc['待上架'] || []).forEach(item => { if (item?.id && !item.isPlaceholder) usedProductIds.add(String(item.id)); });
             (acc['已上架json'] || []).forEach(item => { if (item?.id) usedProductIds.add(String(item.id)); });
         });
 
@@ -107,9 +109,9 @@ export async function GET(request: NextRequest) {
         const { data: newestProduct, error: productError } = await productQuery.order('created_at', { ascending: false }).limit(1).single();
 
         if (productError || !newestProduct) {
-            await log('INFO', `No new, unused products found for this account.`, { account_name: account.name });
+            await log('WARN', `Found a placeholder but no new, unused products are available to fill it.`, { account_name: account.name });
         } else {
-            await log('INFO', `Selected product ${newestProduct.id} for scheduling.`, { account_name: account.name, product_id: newestProduct.id });
+            await log('INFO', `Selected product ${newestProduct.id} to fill placeholder.`, { account_name: account.name, product_id: newestProduct.id });
             
             const originalContent = newestProduct.result_text_content || '';
             const copywritingPrompt = account['文案生成prompt'] || 'Make this text better.';
@@ -120,20 +122,22 @@ export async function GET(request: NextRequest) {
             
             await supabase.from('search_results_duplicate_本人').update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true }).eq('id', newestProduct.id);
 
-            const nextScheduleTime = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-            const newScheduledItem: ScheduledProduct = {
+            // Replace the placeholder with the new product info
+            const updatedScheduledItem: ScheduledProduct = {
                 id: newestProduct.id.toString(),
-                scheduled_at: nextScheduleTime,
+                scheduled_at: placeholderItem.scheduled_at, // Use placeholder's original time
                 isPlaceholder: false
             };
+
+            const updatedPendingQueue = [...pendingQueue];
+            updatedPendingQueue[placeholderIndex] = updatedScheduledItem;
             
-            const newPendingQueue = [newScheduledItem];
-            const { error: queueError } = await supabase.from('accounts_duplicate').update({ '待上架': newPendingQueue }).eq('name', account.name);
+            const { error: queueError } = await supabase.from('accounts_duplicate').update({ '待上架': updatedPendingQueue }).eq('name', account.name);
 
             if (queueError) {
-                await log('ERROR', `Failed to update pending queue.`, { account_name: account.name, error: queueError.message });
+                await log('ERROR', `Failed to update pending queue with new product.`, { account_name: account.name, error: queueError.message });
             } else {
-                await log('SUCCESS', `Successfully scheduled product ${newestProduct.id} at ${nextScheduleTime}.`, { account_name: account.name });
+                await log('SUCCESS', `Successfully filled placeholder with product ${newestProduct.id} at ${placeholderItem.scheduled_at}.`, { account_name: account.name });
             }
         }
       } finally {

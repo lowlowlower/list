@@ -292,6 +292,76 @@ export default function AccountsPage() {
                 const rawPendingProducts = (acc as Account)['待上架'] || [];
                 const cleanPendingProducts = rawPendingProducts;
                 
+                // --- Generate Today's Schedule Preview ---
+                let todays_schedule: ScheduledProduct[] | null = null;
+                const rule = (acc as Account).scheduling_rule;
+
+                if (rule && rule.items_per_day > 0) {
+                    const now = new Date();
+
+                    // 1. Get existing future-scheduled items and unscheduled IDs
+                    const futureScheduledItems = (cleanPendingProducts.filter(item =>
+                        typeof item === 'object' && item !== null && item.scheduled_at && new Date(item.scheduled_at) > now
+                    ) as ScheduledProduct[]).sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+
+                    const unscheduledIds = cleanPendingProducts
+                        .filter(item => typeof item === 'string')
+                        .sort() as string[]; // Sort for deterministic order
+
+                    const finalSchedule: ScheduledProduct[] = [...futureScheduledItems];
+                    const unscheduledIdsQueue = [...unscheduledIds]; // Create a mutable queue
+
+                    // 2. Determine the starting time for filling empty slots
+                    const intervalMillis = (24 * 60 / rule.items_per_day) * 60 * 1000;
+                    let nextScheduleTime: number;
+
+                    const lastScheduledItem = finalSchedule.length > 0 ? finalSchedule[finalSchedule.length - 1] : null;
+
+                    if (lastScheduledItem) {
+                        // Schedule relative to the last existing item
+                        nextScheduleTime = new Date(lastScheduledItem.scheduled_at).getTime() + intervalMillis;
+                    } else {
+                        // First item, schedule it predictably
+                        nextScheduleTime = now.getTime() + 10 * 60 * 1000; // 10 mins from now
+                    }
+                    
+                    // Ensure the first new item is not in the past
+                    if (nextScheduleTime < now.getTime()) {
+                        nextScheduleTime = now.getTime() + 10 * 60 * 1000;
+                    }
+                    
+                    // 3. Fill the schedule up to the desired number of items
+                    const placeholderBaseIndex = finalSchedule.filter(item => item.isPlaceholder).length;
+                    let placeholderCounter = 1;
+                    
+                    while (finalSchedule.length < rule.items_per_day) {
+                        const nextProductId = unscheduledIdsQueue.shift();
+
+                        if (nextProductId) {
+                            // Add a real product
+                        finalSchedule.push({
+                                id: nextProductId,
+                                scheduled_at: new Date(nextScheduleTime).toISOString(),
+                            isPlaceholder: false,
+                        });
+                        } else {
+                            // Add a placeholder
+                            finalSchedule.push({
+                                id: `待定商品 ${placeholderBaseIndex + placeholderCounter}`,
+                                scheduled_at: new Date(nextScheduleTime).toISOString(),
+                                isPlaceholder: true,
+                            });
+                            placeholderCounter++;
+                        }
+                        nextScheduleTime += intervalMillis;
+                    }
+                    
+                    // 4. Sort and assign
+                    finalSchedule.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+                    todays_schedule = finalSchedule;
+                }
+                // --- End of Schedule Generation ---
+
                 return {
                     ...acc,
                     '待上架': cleanPendingProducts, // Use the reconciled list
@@ -300,6 +370,7 @@ export default function AccountsPage() {
                     '关键词prompt': acc['关键词prompt'] || defaultKeywordPrompt,
                     '业务描述': acc['业务描述'] || defaultBusinessPrompt,
                     '文案生成prompt': acc['文案生成prompt'] || defaultCopywritingPrompt, // Set default
+                    todays_schedule: todays_schedule, // Attach today's schedule
                     today_new_products: newProductsCountMap.get(acc.name) || 0, // Add the new count
                 };
             });
@@ -1066,70 +1137,87 @@ export default function AccountsPage() {
     const handleSaveRule = async (accountName: string) => {
         setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: true } }));
         
+        const items_per_day_input = editingRules[accountName]?.items_per_day;
+        const items_per_day = (typeof items_per_day_input === 'number' && items_per_day_input > 0) 
+            ? items_per_day_input 
+            : 0;
+
+        const ruleToSave = { 
+            items_per_day,
+            enabled: allAccounts.find(acc => acc.name === accountName)?.scheduling_rule?.enabled ?? false // Preserve enabled status
+        };
+
         try {
+            // --- This is the new, crucial logic ---
+            // 1. Get the current state of the account
             const accountToUpdate = allAccounts.find(acc => acc.name === accountName);
-            if (!accountToUpdate) {
-                throw new Error("找不到要更新的账号。");
-            }
-    
-            const items_per_day = editingRules[accountName]?.items_per_day;
-            const newRule = (typeof items_per_day === 'number' && items_per_day > 0) 
-                ? { ...accountToUpdate.scheduling_rule, enabled: accountToUpdate.scheduling_rule?.enabled ?? true, items_per_day } 
-                : { ...accountToUpdate.scheduling_rule, enabled: accountToUpdate.scheduling_rule?.enabled ?? false, items_per_day: 0 };
-    
-            const currentPendingQueue = (accountToUpdate['待上架'] || []) as ScheduledProduct[];
-            const filledItems = currentPendingQueue.filter(item => item && !item.isPlaceholder);
-            
-            let newPlaceholders: ScheduledProduct[] = [];
-            const itemsToSchedule = newRule.items_per_day || 0;
-            const placeholdersNeeded = itemsToSchedule - filledItems.length;
-    
-            if (placeholdersNeeded > 0) {
-                let lastScheduleTime = new Date();
-                
-                const validTimes = currentPendingQueue
-                    .map(p => p && p.scheduled_at ? new Date(p.scheduled_at).getTime() : 0)
-                    .filter(t => t > 0);
-    
-                if (validTimes.length > 0) {
-                    const latestTime = new Date(Math.max(...validTimes));
-                    if (latestTime > lastScheduleTime) {
-                        lastScheduleTime = latestTime;
-                    }
-                }
+            if (!accountToUpdate) throw new Error("Account not found in current state.");
 
-                // Ensure the first new item is not in the past
-                if (lastScheduleTime.getTime() < Date.now()) {
-                    lastScheduleTime = new Date(Date.now() + 5 * 60 * 1000); // 5 mins from now
-                }
+            // 2. Recalculate the schedule based on the NEW rule
+            // This logic is borrowed and adapted from fetchAccounts
+            const { '待上架': existingPending, '已上架': existingDeployed } = accountToUpdate;
+            const now = new Date();
+            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+            const endOfDay = startOfDay + 24 * 60 * 60 * 1000 -1;
+            const intervalMillis = (18 * 60 * 60 * 1000) / items_per_day;
 
-                const intervalMinutes = itemsToSchedule > 1 ? (24 * 60) / itemsToSchedule : 0;
-    
-                for (let i = 0; i < placeholdersNeeded; i++) {
-                    lastScheduleTime.setMinutes(lastScheduleTime.getMinutes() + intervalMinutes);
-                    newPlaceholders.push({
-                        id: `placeholder_${Date.now()}_${i}`, 
-                        scheduled_at: lastScheduleTime.toISOString(),
-                        isPlaceholder: true
-                    });
-                }
-            }
+            let finalSchedule: ScheduledProduct[] = (existingPending || [])
+                .filter((item): item is ScheduledProduct => {
+                    if (!item || typeof item !== 'object' || !item.scheduled_at) return false;
+                    const itemTime = new Date(item.scheduled_at).getTime();
+                    return itemTime >= startOfDay && itemTime <= endOfDay && !item.isPlaceholder;
+                });
             
-            const finalPendingQueue = [...filledItems, ...newPlaceholders];
-    
+            const unscheduledIdsQueue: string[] = (existingPending || [])
+                 .filter(item => typeof item === 'string' || (item && typeof item === 'object' && !item.scheduled_at))
+                 .map(item => typeof item === 'string' ? item : (item as ScheduledProduct).id);
+
+            let lastScheduleTime = Math.max(
+                now.getTime(),
+                ...finalSchedule.map(item => new Date(item.scheduled_at).getTime())
+            );
+
+            let nextScheduleTime: number;
+            if (lastScheduleTime < startOfDay || finalSchedule.length === 0) {
+                 nextScheduleTime = now.getTime() + 10 * 60 * 1000;
+            } else {
+                 nextScheduleTime = lastScheduleTime + intervalMillis;
+            }
+            if (nextScheduleTime < now.getTime()){
+                 nextScheduleTime = now.getTime() + 10 * 60 * 1000;
+            }
+
+            const placeholderBaseIndex = finalSchedule.filter(item => item.isPlaceholder).length;
+            let placeholderCounter = 1;
+
+            while (finalSchedule.length < items_per_day) {
+                const nextProductId = unscheduledIdsQueue.shift();
+                if (nextProductId) {
+                    finalSchedule.push({ id: nextProductId, scheduled_at: new Date(nextScheduleTime).toISOString(), isPlaceholder: false });
+                } else {
+                    finalSchedule.push({ id: `待定商品 ${placeholderBaseIndex + placeholderCounter}`, scheduled_at: new Date(nextScheduleTime).toISOString(), isPlaceholder: true });
+                    placeholderCounter++;
+                }
+                nextScheduleTime += intervalMillis;
+            }
+            finalSchedule.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+            // --- End of new logic ---
+
+
+            // 3. Save both the new rule AND the newly calculated schedule
             const { error } = await supabase
                 .from('accounts_duplicate')
                 .update({ 
-                    scheduling_rule: newRule, 
-                    '待上架': finalPendingQueue,
+                    scheduling_rule: ruleToSave, 
+                    '待上架': finalSchedule, // This is the magic part that cleans the data
                     updated_at: new Date().toISOString() 
                 })
                 .eq('name', accountName);
             
             if (error) throw error;
             
-            alert('排期规则保存成功，并已智能补充排期！');
-            await fetchAccounts(); 
+            alert('排期规则保存并刷新成功！');
+            fetchAccounts(); // Refresh all data to show new state
 
         } catch (err: unknown) {
             alert(`保存规则失败: ${getErrorMessage(err)}`);

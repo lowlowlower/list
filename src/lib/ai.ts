@@ -49,7 +49,7 @@ export async function generateImageBufferFromText(text: string): Promise<Buffer>
     });
 
     return sharp(Buffer.from(svg)).png().toBuffer();
-}
+        }
 
 // --- CORE LOGIC: UPLOAD IMAGE TO SUPABASE ---
 export async function uploadImageToSupabase(imageBuffer: Buffer): Promise<string> {
@@ -65,7 +65,7 @@ export async function uploadImageToSupabase(imageBuffer: Buffer): Promise<string
     if (uploadError) {
         console.error('Supabase Storage upload error:', uploadError);
         throw new Error(`Failed to upload image to Supabase Storage. Details: ${uploadError.message}`);
-    }
+            }
 
     const { data: publicUrlData } = supabaseAdmin.storage
         .from(STORAGE_BUCKET_NAME)
