@@ -80,33 +80,22 @@ export async function GET(request: NextRequest) {
       }
 
       try {
-        const items_per_day = account.scheduling_rule?.items_per_day ?? 0;
-        if (items_per_day <= 0) {
+        const pendingQueue = (account['待上架'] || []) as ScheduledProduct[];
+        
+        const placeholderIndex = pendingQueue.findIndex(item => item && item.isPlaceholder);
+
+        if (placeholderIndex === -1) {
+            await log('INFO', `No available placeholder found in the queue for this account. Skipping.`, { account_name: account.name });
             continue;
         }
 
-        const pendingQueue = account['待上架'] || [];
+        await log('INFO', `Found an available placeholder at index ${placeholderIndex}. Looking for a new product.`, { account_name: account.name });
         
-        const now = new Date();
-        const today_start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-        const today_end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+        const placeholderToFill = pendingQueue[placeholderIndex];
 
-        const scheduled_for_today = pendingQueue.filter(item => {
-            if (!item || !item.scheduled_at) return false;
-            const scheduledDate = new Date(item.scheduled_at);
-            return scheduledDate >= today_start && scheduledDate <= today_end;
-        });
-
-        if (scheduled_for_today.length >= items_per_day) {
-            await log('INFO', `Daily schedule limit of ${items_per_day} reached for account.`, { account_name: account.name });
-            continue;
-        }
-
-        await log('INFO', `Daily limit not reached (${scheduled_for_today.length}/${items_per_day}). Looking for a new product.`, { account_name: account.name });
-        
         const usedProductIds = new Set<string>();
         accounts.forEach((acc: AutomationAccount & { '已上架json': ScheduledProduct[] | null }) => {
-            (acc['待上架'] || []).forEach(item => { if (item?.id) usedProductIds.add(String(item.id)); });
+            (acc['待上架'] || []).forEach(item => { if (item?.id && !item.isPlaceholder) usedProductIds.add(String(item.id)); });
             (acc['已上架json'] || []).forEach(item => { if (item?.id) usedProductIds.add(String(item.id)); });
         });
 
@@ -117,9 +106,9 @@ export async function GET(request: NextRequest) {
         const { data: newestProduct, error: productError } = await productQuery.order('created_at', { ascending: false }).limit(1).single();
 
         if (productError || !newestProduct) {
-            await log('INFO', `No new, unused products found for this account.`, { account_name: account.name });
+            await log('INFO', `No new, unused products found to fill the placeholder.`, { account_name: account.name });
         } else {
-            await log('INFO', `Selected product ${newestProduct.id} for scheduling.`, { account_name: account.name, product_id: newestProduct.id });
+            await log('INFO', `Selected product ${newestProduct.id} to fill placeholder for time slot ${placeholderToFill.scheduled_at}.`, { account_name: account.name, product_id: newestProduct.id });
             
             const originalContent = newestProduct.result_text_content || '';
             const copywritingPrompt = account['文案生成prompt'] || 'Make this text better.';
@@ -130,34 +119,21 @@ export async function GET(request: NextRequest) {
             
             await supabase.from('search_results_duplicate_本人').update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true }).eq('id', newestProduct.id);
 
-            let nextScheduleTime = new Date();
-            const allPendingItems = pendingQueue || [];
-            if (allPendingItems.length > 0) {
-                const validTimes = allPendingItems.map(p => p && p.scheduled_at ? new Date(p.scheduled_at).getTime() : 0).filter(t => t > 0);
-                if(validTimes.length > 0) {
-                    const latestTime = new Date(Math.max(...validTimes));
-                    if (latestTime > nextScheduleTime) {
-                        nextScheduleTime = latestTime;
-                    }
-                }
-            }
-            
-            const randomIntervalHours = 2 + Math.random() * 2;
-            nextScheduleTime.setHours(nextScheduleTime.getHours() + randomIntervalHours);
-            
-            const newScheduledItem: ScheduledProduct = {
+            const filledScheduledItem: ScheduledProduct = {
                 id: newestProduct.id.toString(),
-                scheduled_at: nextScheduleTime.toISOString(),
+                scheduled_at: placeholderToFill.scheduled_at, // Use the original placeholder time
                 isPlaceholder: false
             };
             
-            const newPendingQueue = [...pendingQueue, newScheduledItem];
+            const newPendingQueue = [...pendingQueue];
+            newPendingQueue[placeholderIndex] = filledScheduledItem;
+
             const { error: queueError } = await supabase.from('accounts_duplicate').update({ '待上架': newPendingQueue }).eq('name', account.name);
 
             if (queueError) {
-                await log('ERROR', `Failed to update pending queue.`, { account_name: account.name, error: queueError.message });
+                await log('ERROR', `Failed to update pending queue with filled item.`, { account_name: account.name, error: queueError.message });
             } else {
-                await log('SUCCESS', `Successfully scheduled product ${newestProduct.id} at ${nextScheduleTime.toISOString()}.`, { account_name: account.name });
+                await log('SUCCESS', `Successfully filled placeholder with product ${newestProduct.id} for time slot ${placeholderToFill.scheduled_at}.`, { account_name: account.name });
             }
         }
       } finally {
