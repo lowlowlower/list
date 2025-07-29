@@ -80,20 +80,29 @@ export async function GET(request: NextRequest) {
       }
 
       try {
-        const pendingQueue = account['待上架'] || [];
-        const futurePendingQueue = pendingQueue.filter(item => 
-            item && typeof item === 'object' && item.scheduled_at && new Date(item.scheduled_at).getTime() > Date.now()
-        );
-
-        if (futurePendingQueue.length > 0) {
-            await log('INFO', `Account already has a future-scheduled item in the queue. Skipping.`, {
-                account_name: account.name,
-                future_queue_size: futurePendingQueue.length
-            });
+        const items_per_day = account.scheduling_rule?.items_per_day ?? 0;
+        if (items_per_day <= 0) {
             continue;
         }
 
-        await log('INFO', `Pending queue is empty or has no future items. Starting product processing.`, { account_name: account.name });
+        const pendingQueue = account['待上架'] || [];
+        
+        const now = new Date();
+        const today_start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        const today_end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+        const scheduled_for_today = pendingQueue.filter(item => {
+            if (!item || !item.scheduled_at) return false;
+            const scheduledDate = new Date(item.scheduled_at);
+            return scheduledDate >= today_start && scheduledDate <= today_end;
+        });
+
+        if (scheduled_for_today.length >= items_per_day) {
+            await log('INFO', `Daily schedule limit of ${items_per_day} reached for account.`, { account_name: account.name });
+            continue;
+        }
+
+        await log('INFO', `Daily limit not reached (${scheduled_for_today.length}/${items_per_day}). Looking for a new product.`, { account_name: account.name });
         
         const usedProductIds = new Set<string>();
         accounts.forEach((acc: AutomationAccount & { '已上架json': ScheduledProduct[] | null }) => {
@@ -121,20 +130,34 @@ export async function GET(request: NextRequest) {
             
             await supabase.from('search_results_duplicate_本人').update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true }).eq('id', newestProduct.id);
 
-            const nextScheduleTime = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+            let nextScheduleTime = new Date();
+            const allPendingItems = pendingQueue || [];
+            if (allPendingItems.length > 0) {
+                const validTimes = allPendingItems.map(p => p && p.scheduled_at ? new Date(p.scheduled_at).getTime() : 0).filter(t => t > 0);
+                if(validTimes.length > 0) {
+                    const latestTime = new Date(Math.max(...validTimes));
+                    if (latestTime > nextScheduleTime) {
+                        nextScheduleTime = latestTime;
+                    }
+                }
+            }
+            
+            const randomIntervalHours = 2 + Math.random() * 2;
+            nextScheduleTime.setHours(nextScheduleTime.getHours() + randomIntervalHours);
+            
             const newScheduledItem: ScheduledProduct = {
                 id: newestProduct.id.toString(),
-                scheduled_at: nextScheduleTime,
+                scheduled_at: nextScheduleTime.toISOString(),
                 isPlaceholder: false
             };
             
-            const newPendingQueue = [newScheduledItem];
+            const newPendingQueue = [...pendingQueue, newScheduledItem];
             const { error: queueError } = await supabase.from('accounts_duplicate').update({ '待上架': newPendingQueue }).eq('name', account.name);
 
             if (queueError) {
                 await log('ERROR', `Failed to update pending queue.`, { account_name: account.name, error: queueError.message });
             } else {
-                await log('SUCCESS', `Successfully scheduled product ${newestProduct.id} at ${nextScheduleTime}.`, { account_name: account.name });
+                await log('SUCCESS', `Successfully scheduled product ${newestProduct.id} at ${nextScheduleTime.toISOString()}.`, { account_name: account.name });
             }
         }
       } finally {
