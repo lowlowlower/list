@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { type NextRequest, NextResponse } from 'next/server';
 import { generateImageBufferFromText, uploadImageToSupabase } from '@/lib/ai';
-import type { ScheduledProduct } from '@/types';
+import type { ScheduledProduct } from '@/lib/types';
 
 const supabaseUrl = "https://urfibhtfqgffpanpsjds.supabase.co";
 const supabaseServiceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyZmliaHRmcWdmZnBhbnBzamRzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NTY0NSwiZXhwIjoyMDUxMzYxNjQ1fQ.fHIeQZR1l_lGPV7hYJkcahkEvYytIBpasXOg4m1atAs";

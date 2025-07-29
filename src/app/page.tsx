@@ -1155,13 +1155,13 @@ export default function AccountsPage() {
 
             // 2. Recalculate the schedule based on the NEW rule
             // This logic is borrowed and adapted from fetchAccounts
-            const { '待上架': existingPending, '已上架': existingDeployed } = accountToUpdate;
+            const { '待上架': existingPending } = accountToUpdate;
             const now = new Date();
             const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
             const endOfDay = startOfDay + 24 * 60 * 60 * 1000 -1;
             const intervalMillis = (18 * 60 * 60 * 1000) / items_per_day;
 
-            let finalSchedule: ScheduledProduct[] = (existingPending || [])
+            const finalSchedule: ScheduledProduct[] = (existingPending || [])
                 .filter((item): item is ScheduledProduct => {
                     if (!item || typeof item !== 'object' || !item.scheduled_at) return false;
                     const itemTime = new Date(item.scheduled_at).getTime();
@@ -1172,7 +1172,7 @@ export default function AccountsPage() {
                  .filter(item => typeof item === 'string' || (item && typeof item === 'object' && !item.scheduled_at))
                  .map(item => typeof item === 'string' ? item : (item as ScheduledProduct).id);
 
-            let lastScheduleTime = Math.max(
+            const lastScheduleTime = Math.max(
                 now.getTime(),
                 ...finalSchedule.map(item => new Date(item.scheduled_at).getTime())
             );
