@@ -81,19 +81,32 @@ export async function GET(request: NextRequest) {
 
       try {
         const pendingQueue = (account['待上架'] || []) as ScheduledProduct[];
-        
-        // This is the new, simplified logic as requested by the user.
-        if (pendingQueue.length > 0) {
-            await log('INFO', `Pending queue is not empty (contains ${pendingQueue.length} items). Skipping.`, {
+
+        // --- NEW, TOP-PRIORITY LOGIC: "Keep One in Stock" rule ---
+        const realProductsInQueue = pendingQueue.filter(item => item && !item.isPlaceholder);
+        if (realProductsInQueue.length > 0) {
+            await log('INFO', `Queue already has ${realProductsInQueue.length} real product(s). Skipping to maintain a single item.`, {
                 account_name: account.name,
-                queue_size: pendingQueue.length
+                real_item_count: realProductsInQueue.length
             });
-            continue; // Skip if there's anything in the queue
+            continue; // CRUCIAL: Exit if there's already a real product waiting.
+        }
+        // --- END OF NEW LOGIC ---
+        
+        // Find the index of the first placeholder in the queue.
+        const placeholderIndex = pendingQueue.findIndex(item => item && item.isPlaceholder);
+
+        if (placeholderIndex === -1) {
+            await log('INFO', `No placeholder found and no real items in queue. Nothing to do. Skipping.`, {
+                account_name: account.name,
+            });
+            continue; // No placeholder to fill
         }
         
-        await log('INFO', `Pending queue is empty. Attempting to schedule one new product.`, { account_name: account.name });
+        const placeholderItem = pendingQueue[placeholderIndex];
+        await log('INFO', `Queue is empty of real products. Found placeholder to fill at time: ${placeholderItem.scheduled_at}`, { account_name: account.name });
 
-        // We still need to know all used product IDs across all accounts to not pick a duplicate
+        // We only consider REAL products as "used". Placeholders don't count.
         const usedProductIds = new Set<string>();
         accounts.forEach((acc: AutomationAccount & { '已上架json': ScheduledProduct[] | null }) => {
             (acc['待上架'] || []).forEach(item => { if (item?.id && !item.isPlaceholder) usedProductIds.add(String(item.id)); });
@@ -107,9 +120,9 @@ export async function GET(request: NextRequest) {
         const { data: newestProduct, error: productError } = await productQuery.order('created_at', { ascending: false }).limit(1).single();
 
         if (productError || !newestProduct) {
-            await log('WARN', `Pending queue is empty, but no new, unused products were found.`, { account_name: account.name });
+            await log('WARN', `Found a placeholder but no new, unused products are available to fill it.`, { account_name: account.name });
         } else {
-            await log('INFO', `Selected product ${newestProduct.id} to schedule.`, { account_name: account.name, product_id: newestProduct.id });
+            await log('INFO', `Selected product ${newestProduct.id} to fill placeholder.`, { account_name: account.name, product_id: newestProduct.id });
             
             const originalContent = newestProduct.result_text_content || '';
             const copywritingPrompt = account['文案生成prompt'] || 'Make this text better.';
@@ -120,28 +133,23 @@ export async function GET(request: NextRequest) {
             
             await supabase.from('search_results_duplicate_本人').update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true }).eq('id', newestProduct.id);
 
-            // The time logic from the frontend should be respected here.
-            // But since we are only adding if the queue is empty, we must generate a time.
-            // This time should ideally come from the user's pre-calculated schedule.
-            // For now, we add it with a time 'soon'. A better approach would be to read the empty schedule slots.
-            // However, based on the new simple rule, we just add one.
-            const nextScheduleTime = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-            const newScheduledItem: ScheduledProduct = {
+            // Create the new item, using the placeholder's original time.
+            const updatedScheduledItem: ScheduledProduct = {
                 id: newestProduct.id.toString(),
-                scheduled_at: nextScheduleTime,
+                scheduled_at: placeholderItem.scheduled_at, // CRUCIAL: Respects the pre-calculated time
                 isPlaceholder: false
             };
 
-            // The new queue will contain only this one item.
-            const newPendingQueue = [newScheduledItem];
+            // Replace the placeholder in the queue with the real product.
+            const updatedPendingQueue = [...pendingQueue];
+            updatedPendingQueue[placeholderIndex] = updatedScheduledItem;
             
-            const { error: queueError } = await supabase.from('accounts_duplicate').update({ '待上架': newPendingQueue }).eq('name', account.name);
+            const { error: queueError } = await supabase.from('accounts_duplicate').update({ '待上架': updatedPendingQueue }).eq('name', account.name);
 
             if (queueError) {
                 await log('ERROR', `Failed to update pending queue with the new product.`, { account_name: account.name, error: queueError.message });
             } else {
-                await log('SUCCESS', `Successfully scheduled product ${newestProduct.id} at ${nextScheduleTime}.`, { account_name: account.name });
+                await log('SUCCESS', `Successfully filled placeholder with product ${newestProduct.id} at ${placeholderItem.scheduled_at}.`, { account_name: account.name });
             }
         }
       } finally {
