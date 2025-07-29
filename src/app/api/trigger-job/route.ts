@@ -80,22 +80,23 @@ export async function GET(request: NextRequest) {
       }
 
       try {
-        const pendingQueue = (account['待上架'] || []) as ScheduledProduct[];
-        
-        const placeholderIndex = pendingQueue.findIndex(item => item && item.isPlaceholder);
+        const pendingQueue = (account['待上架'] || []).filter(item => item && typeof item === 'object' && item.id && item.scheduled_at);
 
-        if (placeholderIndex === -1) {
-            await log('INFO', `No available placeholder found in the queue for this account. Skipping.`, { account_name: account.name });
+        if (pendingQueue.length > 0) {
+            await log('INFO', `Account already has an item in the pending queue. Skipping.`, {
+                account_name: account.name,
+                queue_size: pendingQueue.length,
+                next_item_id: pendingQueue[0].id,
+                next_item_time: pendingQueue[0].scheduled_at
+            });
             continue;
         }
 
-        await log('INFO', `Found an available placeholder at index ${placeholderIndex}. Looking for a new product.`, { account_name: account.name });
+        await log('INFO', `Pending queue is empty. Starting product processing.`, { account_name: account.name });
         
-        const placeholderToFill = pendingQueue[placeholderIndex];
-
         const usedProductIds = new Set<string>();
         accounts.forEach((acc: AutomationAccount & { '已上架json': ScheduledProduct[] | null }) => {
-            (acc['待上架'] || []).forEach(item => { if (item?.id && !item.isPlaceholder) usedProductIds.add(String(item.id)); });
+            (acc['待上架'] || []).forEach(item => { if (item?.id) usedProductIds.add(String(item.id)); });
             (acc['已上架json'] || []).forEach(item => { if (item?.id) usedProductIds.add(String(item.id)); });
         });
 
@@ -106,9 +107,9 @@ export async function GET(request: NextRequest) {
         const { data: newestProduct, error: productError } = await productQuery.order('created_at', { ascending: false }).limit(1).single();
 
         if (productError || !newestProduct) {
-            await log('INFO', `No new, unused products found to fill the placeholder.`, { account_name: account.name });
+            await log('INFO', `No new, unused products found for this account.`, { account_name: account.name });
         } else {
-            await log('INFO', `Selected product ${newestProduct.id} to fill placeholder for time slot ${placeholderToFill.scheduled_at}.`, { account_name: account.name, product_id: newestProduct.id });
+            await log('INFO', `Selected product ${newestProduct.id} for scheduling.`, { account_name: account.name, product_id: newestProduct.id });
             
             const originalContent = newestProduct.result_text_content || '';
             const copywritingPrompt = account['文案生成prompt'] || 'Make this text better.';
@@ -119,21 +120,20 @@ export async function GET(request: NextRequest) {
             
             await supabase.from('search_results_duplicate_本人').update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true }).eq('id', newestProduct.id);
 
-            const filledScheduledItem: ScheduledProduct = {
+            const nextScheduleTime = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+            const newScheduledItem: ScheduledProduct = {
                 id: newestProduct.id.toString(),
-                scheduled_at: placeholderToFill.scheduled_at, // Use the original placeholder time
+                scheduled_at: nextScheduleTime,
                 isPlaceholder: false
             };
             
-            const newPendingQueue = [...pendingQueue];
-            newPendingQueue[placeholderIndex] = filledScheduledItem;
-
+            const newPendingQueue = [newScheduledItem];
             const { error: queueError } = await supabase.from('accounts_duplicate').update({ '待上架': newPendingQueue }).eq('name', account.name);
 
             if (queueError) {
-                await log('ERROR', `Failed to update pending queue with filled item.`, { account_name: account.name, error: queueError.message });
+                await log('ERROR', `Failed to update pending queue.`, { account_name: account.name, error: queueError.message });
             } else {
-                await log('SUCCESS', `Successfully filled placeholder with product ${newestProduct.id} for time slot ${placeholderToFill.scheduled_at}.`, { account_name: account.name });
+                await log('SUCCESS', `Successfully scheduled product ${newestProduct.id} at ${nextScheduleTime}.`, { account_name: account.name });
             }
         }
       } finally {
