@@ -219,6 +219,76 @@ export default function AccountsPage() {
         return () => clearInterval(interval);
     }, []);
 
+    useEffect(() => {
+        const scheduleRoller = setInterval(() => {
+            setAllAccounts(currentAccounts => {
+                let hasChanged = false;
+                const updatedAccounts = currentAccounts.map(account => {
+                    const rule = account.scheduling_rule;
+                    if (!rule || !rule.enabled || !account.todays_schedule || account.todays_schedule.length === 0) {
+                        return account;
+                    }
+
+                    const now = new Date().getTime();
+                    let todays_schedule = [...account.todays_schedule];
+                    
+                    const outdatedCount = todays_schedule.filter(item => new Date(item.scheduled_at).getTime() < now).length;
+
+                    if (outdatedCount > 0) {
+                        hasChanged = true;
+                        
+                        // Filter out outdated items
+                        todays_schedule = todays_schedule.filter(item => new Date(item.scheduled_at).getTime() >= now);
+
+                        // Find the last scheduled time to calculate the next one
+                        const lastSchedule = todays_schedule[todays_schedule.length - 1];
+                        let lastScheduleTime = lastSchedule ? new Date(lastSchedule.scheduled_at).getTime() : now;
+
+                        const intervalMillis = (24 * 60 * 60 * 1000) / rule.items_per_day;
+
+                        // Add new placeholders to maintain the total count
+                        for (let i = 0; i < outdatedCount; i++) {
+                            lastScheduleTime += intervalMillis;
+                            const newPlaceholder: ScheduledProduct = {
+                                id: `待定商品 ${new Date().getTime() + i}`, // Unique ID
+                                scheduled_at: new Date(lastScheduleTime).toISOString(),
+                                isPlaceholder: true,
+                            };
+                            todays_schedule.push(newPlaceholder);
+                        }
+                        
+                        // Return a new object for the account to trigger re-render
+                        return { ...account, todays_schedule };
+                    }
+                    
+                    return account;
+                });
+
+                if (hasChanged) {
+                    // If any account's schedule was updated, save all changes to the database
+                    const accountsToUpdate = updatedAccounts.filter((acc, index) => JSON.stringify(acc.todays_schedule) !== JSON.stringify(currentAccounts[index].todays_schedule));
+                    
+                    accountsToUpdate.forEach(acc => {
+                        const updatedData = {
+                            '待上架': acc.todays_schedule
+                        };
+                        supabase.from('accounts').update(updatedData).eq('name', acc.name).then(({ error }) => {
+                            if (error) {
+                                console.error(`Failed to roll schedule for ${acc.name}:`, error);
+                            }
+                        });
+                    });
+
+                    return updatedAccounts;
+                }
+
+                return currentAccounts;
+            });
+        }, 60000); // Check every 60 seconds
+
+        return () => clearInterval(scheduleRoller);
+    }, [supabase]);
+
     const handlePasswordSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         // Simple password check, replace with a more secure method for production
@@ -294,53 +364,12 @@ export default function AccountsPage() {
                     ? rawPendingProducts.filter(p => p !== null && p !== undefined)
                     : [];
                 
-                // --- Generate Today's Schedule Preview ---
-                let todays_schedule: ScheduledProduct[] = [];
-                const rule = acc.scheduling_rule;
-
-                // 1. Start with all real, pending items from the database that have a scheduled time
-                const realPendingItems = cleanPendingProducts
-                    .filter((item): item is ScheduledProduct => 
-                        typeof item === 'object' && item.isPlaceholder === false && !!item.scheduled_at
-                    );
-                
-                todays_schedule = [...realPendingItems];
-
-                // 2. If a rule exists, dynamically fill the list with placeholders to meet the target count
-                if (rule && rule.items_per_day > 0) {
-                    const targetCount = rule.items_per_day;
-                    const intervalMillis = (18 * 60 * 60 * 1000) / targetCount;
-                    
-                    let lastScheduleTime = Math.max(
-                        new Date().getTime(), // Start calculating from now
-                        ...todays_schedule.map(item => new Date(item.scheduled_at).getTime())
-                    );
-
-                    // Find the highest existing placeholder number to continue from there
-                    const placeholderNumbers = cleanPendingProducts
-                        .filter((item): item is ScheduledProduct => typeof item === 'object' && item.isPlaceholder === true && typeof item.id === 'string' && item.id.startsWith('待定商品'))
-                        .map(item => parseInt(item.id.replace('待定商品 ', ''), 10))
-                        .filter(num => !isNaN(num));
-                    let placeholderCounter = placeholderNumbers.length > 0 ? Math.max(...placeholderNumbers) + 1 : 1;
-
-                    while (todays_schedule.length < targetCount) {
-                        const nextScheduleTime = lastScheduleTime + intervalMillis;
-                        todays_schedule.push({
-                            id: `待定商品 ${placeholderCounter++}`,
-                            scheduled_at: new Date(nextScheduleTime).toISOString(),
-                            isPlaceholder: true,
-                        });
-                        lastScheduleTime = nextScheduleTime;
-                    }
-                }
-
-                // 3. Sort the final list chronologically
-                todays_schedule.sort((a, b) => {
-                    if (!a.scheduled_at || !b.scheduled_at) return 0;
-                    const timeA = new Date(a.scheduled_at).getTime();
-                    const timeB = new Date(b.scheduled_at).getTime();
-                    return timeA - timeB;
-                });
+                // --- FINAL, SIMPLIFIED, AND CORRECT SCHEDULING LOGIC ---
+                // The "todays_schedule" is now simply the raw, sorted pending queue from the database.
+                // All complex client-side generation is removed to make the UI a direct reflection of the database state.
+                const todays_schedule: ScheduledProduct[] = (cleanPendingProducts as ScheduledProduct[])
+                    .filter(item => typeof item === 'object' && item.scheduled_at)
+                    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
                 // --- END OF NEW LOGIC ---
 
                 return {
@@ -673,13 +702,68 @@ export default function AccountsPage() {
         // Determine which database field to update based on the arrayKey
         const dbFieldToUpdate = arrayKey === '已上架' ? '已上架json' : '待上架';
 
-        const originalArray = (originalAccount[arrayKey] as (string | { id: string | number })[] | null) || [];
-        const newArray = originalArray.filter(item => {
-            const id = typeof item === 'string' ? item : (item as { id: string | number })?.id;
-            return String(id) !== itemToDelete;
-        });
+        const originalArray = (originalAccount[arrayKey] as (string | ScheduledProduct)[] | null) || [];
+        
+        // --- NEW DELETION LOGIC ---
+        let newArray;
+        const itemIndex = originalArray.findIndex(item => (typeof item === 'object' ? item.id : item) === itemToDelete);
+        
+        if (itemIndex === -1) {
+            console.error("Item to delete not found in array");
+            return;
+        }
 
-        // Wait for supabase operation before updating UI to ensure consistency
+        const itemObject = originalArray[itemIndex];
+
+        // Case 1: Deleting a REAL PRODUCT - replace it with a placeholder
+        if (typeof itemObject === 'object' && !itemObject.isPlaceholder) {
+            const newPlaceholder: ScheduledProduct = {
+                id: `待定商品 (来自 ${itemObject.id})`, // Make the ID unique and informative
+                scheduled_at: itemObject.scheduled_at,
+                isPlaceholder: true,
+            };
+            newArray = [...originalArray];
+            newArray[itemIndex] = newPlaceholder;
+        } 
+        // Case 2: Deleting a PLACEHOLDER - remove and add a new one at the end
+        else {
+            newArray = originalArray.filter(item => (typeof item === 'object' ? item.id : item) !== itemToDelete);
+
+            const rule = originalAccount.scheduling_rule;
+            const items_per_day = rule?.items_per_day ?? 0;
+
+            if (arrayKey === '待上架' && rule && items_per_day > 0 && newArray.length < items_per_day) {
+                const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
+                let lastScheduleTime = 0;
+                if (newArray.length > 0) {
+                    const scheduleTimes = newArray
+                        .map(item => (item as ScheduledProduct).scheduled_at ? new Date((item as ScheduledProduct).scheduled_at).getTime() : 0)
+                        .filter(time => time > 0);
+                    if (scheduleTimes.length > 0) {
+                        lastScheduleTime = Math.max(...scheduleTimes);
+                    }
+                }
+                
+                let placeholderCounter = 1;
+                const existingPlaceholders = newArray.filter(item => (item as ScheduledProduct).isPlaceholder);
+                if (existingPlaceholders.length > 0) {
+                    const placeholderNumbers = existingPlaceholders
+                        .map(item => parseInt(String((item as ScheduledProduct).id).replace(/\D/g, ''), 10))
+                        .filter(num => !isNaN(num));
+                    if (placeholderNumbers.length > 0) {
+                        placeholderCounter = Math.max(...placeholderNumbers) + 1;
+                    }
+                }
+                
+                const nextScheduleTime = lastScheduleTime + intervalMillis;
+                newArray.push({
+                    id: `待定商品 ${placeholderCounter}`,
+                    scheduled_at: new Date(nextScheduleTime).toISOString(),
+                    isPlaceholder: true,
+                });
+            }
+        }
+        
         try {
             const { error } = await supabase
                 .from('accounts_duplicate')
@@ -687,14 +771,33 @@ export default function AccountsPage() {
                 .eq('name', accountName);
 
             if (error) {
-                throw error; // Let the catch block handle the error message
+                alert(`数据库删除失败: ${getErrorMessage(error)}`);
+                fetchAccounts();
+                return; 
             }
             
-            // On success, refresh the entire account list to ensure data consistency
-            await fetchAccounts();
+            // --- Robust Optimistic UI Update ---
+            setAllAccounts(prevAccounts => 
+                prevAccounts.map(acc => {
+                    if (acc.name === accountName) {
+                        const updatedAccount = { ...acc, [dbFieldToUpdate]: newArray };
+                        const cleanPendingProducts = Array.isArray(newArray) 
+                            ? newArray.filter(p => p !== null && p !== undefined)
+                            : [];
+                        
+                        const todays_schedule: ScheduledProduct[] = (cleanPendingProducts as ScheduledProduct[])
+                            .filter(item => typeof item === 'object' && item.scheduled_at)
+                            .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+                        
+                        return { ...updatedAccount, todays_schedule };
+                    }
+                    return acc;
+                })
+            );
 
         } catch (err: unknown) {
             alert(`删除失败: ${getErrorMessage(err)}`);
+            fetchAccounts();
         }
     };
 
@@ -995,54 +1098,25 @@ export default function AccountsPage() {
         // --- End of Automatic Keyword Extraction ---
 
 
-        const currentPending = account['待上架'] || [];
-        
-        const rule = account.scheduling_rule;
-        const newPendingList = [...currentPending];
-        let alertMessage = `产品 ${productId} 已添加到 ${account.name} 的待上架队列。`;
+        // --- NEW DEPLOYMENT LOGIC: Find and fill the first available placeholder ---
+        const currentPending = (account['待上架'] || []) as ScheduledProduct[];
+        const placeholderIndex = currentPending.findIndex(item => item.isPlaceholder);
 
-        // --- New Logic: Fill Placeholders First ---
-        if (rule && rule.items_per_day > 0) {
-            
-            const scheduledItems = currentPending.filter(item => typeof item === 'object' && item?.scheduled_at) as ScheduledProduct[];
-            
-            const scheduledTodayCount = scheduledItems.filter(item => new Date(item.scheduled_at) > new Date()).length;
+        if (placeholderIndex === -1) {
+            alert('上架失败：此账号的排期已满，没有可用的待上架空位。请先删除一个已排期的商品或重置排期。');
+            return;
+        }
 
-            if (scheduledTodayCount < rule.items_per_day) {
-                // There is an open slot for today!
-                const intervalMillis = (24 * 60 / rule.items_per_day) * 60 * 1000;
-                
-                // Find the timestamp of the last scheduled item today, or start a new schedule
-                const lastScheduledItem = scheduledItems.length > 0 
-                    ? scheduledItems.sort((a,b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())[0]
-                    : null;
-
-                let nextScheduleTime;
-                const now = Date.now();
-
-                if (lastScheduledItem && new Date(lastScheduledItem.scheduled_at).getTime() > now) {
-                    // Last scheduled item is in the future, so schedule based on it
-                    nextScheduleTime = new Date(lastScheduledItem.scheduled_at).getTime() + intervalMillis;
-                        } else {
-                    // First item, or last item is in the past. Schedule based on the current time.
-                    const firstPostOffset = 10 * 60 * 1000; // 10 minutes from now, predictable
-                    nextScheduleTime = now + firstPostOffset;
-                }
+        const placeholderToReplace = currentPending[placeholderIndex];
 
                 const newScheduledItem: ScheduledProduct = {
                     id: productId,
-                    scheduled_at: new Date(nextScheduleTime).toISOString(),
-                };
-                newPendingList.push(newScheduledItem);
-                    } else {
-                 newPendingList.push(productId); // Add as a simple ID if today is full
-                 alertMessage = `今日排期已满。产品 ${productId} 已添加到待上架队列末尾。`;
-                    }
+            scheduled_at: placeholderToReplace.scheduled_at, // Inherit the placeholder's time
+            isPlaceholder: false,
+        };
 
-                } else {
-            newPendingList.push(productId); // Default behavior if no rule
-        }
-
+        const newPendingList = [...currentPending];
+        newPendingList[placeholderIndex] = newScheduledItem;
 
         try {
             const { error } = await supabase
@@ -1052,32 +1126,25 @@ export default function AccountsPage() {
 
             if (error) throw error;
 
-            alert(alertMessage);
+            alert(`产品 ${productId} 已成功排期在 ${new Date(newScheduledItem.scheduled_at).toLocaleString()}。`);
             
-            // --- Optimistic UI Update ---
-            const updatedAccount = { ...account, '待上架': newPendingList };
-            
-            // Update the state for the detailed view immediately.
-            setSelectedAccountForProducts(updatedAccount);
-            
-            // Update the master list of accounts.
-            setAllAccounts(prevAccounts => 
-                prevAccounts.map(acc => 
-                    acc.name === selectedAccountForProducts.name 
-                        ? updatedAccount
-                        : acc
-                )
-            );
-            
-            // Manually update the specific product's pending state in the detail view
+            // Optimistic UI update
+            setAllAccounts(prev => prev.map(acc => {
+                if (acc.name === account.name) {
+                    const updatedAccount = { ...acc, '待上架': newPendingList };
+                    const todays_schedule = newPendingList
+                        .filter(item => typeof item === 'object' && item.scheduled_at)
+                        .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+                    return { ...updatedAccount, todays_schedule };
+                }
+                return acc;
+            }));
             setProducts(prevProducts => 
                 prevProducts.map(p => 
                     p.id === productId ? { ...p, isPending: true } : p
                 )
             );
 
-            // Refresh from server in the background to ensure consistency.
-            fetchAccounts();
 
         } catch (err: unknown) {
             console.error('Error deploying product:', err);
@@ -1123,82 +1190,49 @@ export default function AccountsPage() {
             ? items_per_day_input 
             : 0;
 
+        const accountToUpdate = allAccounts.find(acc => acc.name === accountName);
+        if (!accountToUpdate) {
+            alert('错误: 找不到要更新的账号。');
+            setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: false } }));
+            return;
+        }
+
         const ruleToSave = { 
             items_per_day,
-            enabled: allAccounts.find(acc => acc.name === accountName)?.scheduling_rule?.enabled ?? false // Preserve enabled status
+            enabled: accountToUpdate.scheduling_rule?.enabled ?? true // Enable by default when setting a rule
         };
 
-        try {
-            // --- This is the new, crucial logic ---
-            // 1. Get the current state of the account
-            const accountToUpdate = allAccounts.find(acc => acc.name === accountName);
-            if (!accountToUpdate) throw new Error("Account not found in current state.");
-
-            // 2. Recalculate the schedule based on the NEW rule
-            // This logic is borrowed and adapted from fetchAccounts
-            const { '待上架': existingPending } = accountToUpdate;
-            const now = new Date();
-            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-            const endOfDay = startOfDay + 24 * 60 * 60 * 1000 -1;
-            const intervalMillis = (18 * 60 * 60 * 1000) / items_per_day;
-
-            const finalSchedule: ScheduledProduct[] = (existingPending || [])
-                .filter((item): item is ScheduledProduct => {
-                    if (!item || typeof item !== 'object' || !item.scheduled_at) return false;
-                    const itemTime = new Date(item.scheduled_at).getTime();
-                    return itemTime >= startOfDay && itemTime <= endOfDay && !item.isPlaceholder;
-                });
+        // --- NEW CORE LOGIC: Always generate a fresh schedule from now ---
+        const newPendingQueue: ScheduledProduct[] = [];
+            if (items_per_day > 0) {
+            const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
+            // Use a 10-minute buffer as requested
+            const startTime = new Date().getTime() + 10 * 60 * 1000; 
             
-            const unscheduledIdsQueue: string[] = (existingPending || [])
-                 .filter(item => typeof item === 'string' || (item && typeof item === 'object' && !item.scheduled_at))
-                 .map(item => typeof item === 'string' ? item : (item as ScheduledProduct).id);
-
-            const lastScheduleTime = Math.max(
-                now.getTime(),
-                ...finalSchedule.map(item => new Date(item.scheduled_at).getTime())
-            );
-
-            let nextScheduleTime: number;
-            if (lastScheduleTime < startOfDay || finalSchedule.length === 0) {
-                 nextScheduleTime = now.getTime() + 10 * 60 * 1000;
-            } else {
-                 nextScheduleTime = lastScheduleTime + intervalMillis;
-            }
-            if (nextScheduleTime < now.getTime()){
-                 nextScheduleTime = now.getTime() + 10 * 60 * 1000;
-            }
-
-            const placeholderBaseIndex = finalSchedule.filter(item => item.isPlaceholder).length;
-            let placeholderCounter = 1;
-
-            while (finalSchedule.length < items_per_day) {
-                const nextProductId = unscheduledIdsQueue.shift();
-                if (nextProductId) {
-                    finalSchedule.push({ id: nextProductId, scheduled_at: new Date(nextScheduleTime).toISOString(), isPlaceholder: false });
-                } else {
-                    finalSchedule.push({ id: `待定商品 ${placeholderBaseIndex + placeholderCounter}`, scheduled_at: new Date(nextScheduleTime).toISOString(), isPlaceholder: true });
-                    placeholderCounter++;
+            for (let i = 0; i < items_per_day; i++) {
+                const nextScheduleTime = startTime + intervalMillis * i;
+                    newPendingQueue.push({
+                    id: `待定商品 ${i + 1}`,
+                        scheduled_at: new Date(nextScheduleTime).toISOString(),
+                        isPlaceholder: true,
+                    });
                 }
-                nextScheduleTime += intervalMillis;
             }
-            finalSchedule.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-            // --- End of new logic ---
-
-
-            // 3. Save both the new rule AND the newly calculated schedule
+            
+        try {
             const { error } = await supabase
                 .from('accounts_duplicate')
                 .update({ 
                     scheduling_rule: ruleToSave, 
-                    '待上架': finalSchedule, // This is the magic part that cleans the data
+                    '待上架': newPendingQueue,
                     updated_at: new Date().toISOString() 
                 })
                 .eq('name', accountName);
             
             if (error) throw error;
             
-            alert('排期规则保存并刷新成功！');
-            fetchAccounts(); // Refresh all data to show new state
+            alert('排期规则保存并生成成功！');
+            await fetchAccounts();
 
         } catch (err: unknown) {
             alert(`保存规则失败: ${getErrorMessage(err)}`);
@@ -1253,36 +1287,7 @@ export default function AccountsPage() {
         }
     };
 
-    const handleRedeployFailedProduct = async (accountName: string, productId: string) => {
-        const account = allAccounts.find(acc => acc.name === accountName);
-        if (!account) {
-            alert('错误：找不到当前账号的数据。');
-            return;
-        }
 
-        // Remove the specific scheduled item object and add the ID to the end of the queue
-        const newPendingList = (account['待上架'] || [])
-            .filter(item => {
-                const id = typeof item === 'object' && item !== null ? item.id : item;
-                return String(id) !== String(productId);
-            });
-        
-        newPendingList.push(productId);
-
-        try {
-            const { error } = await supabase
-                .from('accounts_duplicate')
-                .update({ '待上架': newPendingList, updated_at: new Date().toISOString() })
-                .eq('name', accountName);
-
-            if (error) throw error;
-
-            alert(`商品 #${productId} 已被重新加入待上架队列末尾。`);
-            await fetchAccounts(); // Refresh all data to ensure consistency
-        } catch (err) {
-            alert(`重新上架失败: ${getErrorMessage(err)}`);
-        }
-    };
 
     const handleAnalyzeTopProducts = async () => {
         if (analysisCount <= 0 || !selectedAccountForProducts) return;
@@ -1554,6 +1559,60 @@ ${aiBatchInput}
         }
     };
 
+    const handleResetSchedule = async (accountName: string) => {
+        if (!confirm(`您确定要重置【${accountName}】的排期吗？\n\n此操作会清空所有当前的待上架安排，并根据现有规则重新生成一套全新的排期。`)) {
+            return;
+        }
+
+        setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: true } }));
+
+        const accountToUpdate = allAccounts.find(acc => acc.name === accountName);
+        if (!accountToUpdate) {
+            alert('错误: 找不到要更新的账号。');
+            setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: false } }));
+            return;
+        }
+
+        const items_per_day = accountToUpdate.scheduling_rule?.items_per_day ?? 0;
+        
+        // --- REUSE THE SAME CORE LOGIC ---
+        const newPendingQueue: ScheduledProduct[] = [];
+        if (items_per_day > 0) {
+            const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
+            // Use a 10-minute buffer as requested
+            const startTime = new Date().getTime() + 10 * 60 * 1000;
+            
+            for (let i = 0; i < items_per_day; i++) {
+                const nextScheduleTime = startTime + intervalMillis * i;
+                newPendingQueue.push({
+                    id: `待定商品 ${i + 1}`,
+                    scheduled_at: new Date(nextScheduleTime).toISOString(),
+                    isPlaceholder: true,
+                });
+            }
+        }
+
+        try {
+            const { error } = await supabase
+                .from('accounts_duplicate')
+                .update({ 
+                    '待上架': newPendingQueue,
+                    updated_at: new Date().toISOString() 
+                })
+                .eq('name', accountName);
+            
+            if (error) throw error;
+            
+            alert('排期重置成功！');
+            await fetchAccounts();
+
+        } catch (err: unknown) {
+            alert(`重置排期失败: ${getErrorMessage(err)}`);
+        } finally {
+             setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: false } }));
+        }
+    };
+
     // --- RENDER LOGIC ---
 
     // Render Password Lock View
@@ -1652,7 +1711,6 @@ ${aiBatchInput}
                                             setEditingSchedule={setEditingSchedule}
                 onUpdateScheduleTime={handleUpdateScheduleTime}
                 onDeleteItemFromArray={handleDeleteItemFromArray}
-                onRedeploy={handleRedeployFailedProduct}
                 onToggleAutomation={handleToggleAutomation}
                 isAddAccountModalOpen={isAddAccountModalOpen}
                 closeAddAccountModal={() => {
@@ -1683,6 +1741,7 @@ ${aiBatchInput}
                     onSaveKeywords={handleSaveKeywords}
                     onGenerateKeywords={handleGenerateKeywords}
                     onSaveRule={handleSaveRule}
+                    onResetSchedule={handleResetSchedule}
                     onNavigateToKeywords={handleAccountSelectForKeywords}
                     editingCopywritingPrompts={editingCopywritingPrompts}
                     setEditingCopywritingPrompts={setEditingCopywritingPrompts}

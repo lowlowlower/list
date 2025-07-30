@@ -2,16 +2,17 @@ import { createClient } from '@supabase/supabase-js';
 import { type NextRequest, NextResponse } from 'next/server';
 import { generateImageBufferFromText, uploadImageToSupabase } from '@/lib/ai';
 import type { ScheduledProduct } from '@/types';
+import crossFetch from 'cross-fetch';
 
 const supabaseUrl = "https://urfibhtfqgffpanpsjds.supabase.co";
 const supabaseServiceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyZmliaHRmcWdmZnBhbnBzamRzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NTY0NSwiZXhwIjoyMDUxMzYxNjQ1fQ.fHIeQZR1l_lGPV7hYJkcahkEvYytIBpasXOg4m1atAs";
 const geminiApiKey = "AIzaSyDmfaMC3pHdY6BYCvL_1pWZF5NLLkh28QU";
 
-if (!supabaseUrl || !supabaseServiceKey || !geminiApiKey) {
-  throw new Error("Supabase or Gemini environment variables are not properly configured.");
-}
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    global: {
+      fetch: crossFetch,
+    },
+});
 const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=${geminiApiKey}`;
 
 type AutomationAccount = {

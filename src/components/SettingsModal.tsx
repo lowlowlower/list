@@ -10,6 +10,7 @@ interface SettingsModalProps {
   onSaveKeywords: (accountName: string) => Promise<void>;
   onGenerateKeywords: (accountName: string) => Promise<void>;
   onSaveRule: (accountName: string) => Promise<void>;
+  onResetSchedule: (accountName: string) => void; // Add new prop
   onNavigateToKeywords: (account: Account) => void;
   
   editingCopywritingPrompts: { [key: string]: string };
@@ -47,6 +48,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveKeywords,
   onGenerateKeywords,
   onSaveRule,
+  onResetSchedule, // Add new prop
   onNavigateToKeywords,
   editingCopywritingPrompts, setEditingCopywritingPrompts,
   editingBusinessPrompts, setEditingBusinessPrompts,
@@ -255,6 +257,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loadingStates[account.name]?.saveRule ? '保存中...' : '保存规则'}
+                </button>
+                <button 
+                  onClick={() => onResetSchedule(account.name)}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loadingStates[account.name]?.saveRule ? '重置中...' : '重置排期'}
                 </button>
               </div>
 

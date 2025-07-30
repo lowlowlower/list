@@ -2,6 +2,7 @@ export type ScheduledProduct = {
     id: string;
     scheduled_at: string;
     isPlaceholder?: boolean;
+    isDeployed?: boolean; // Add this line
 };
 
 export type AiGeneratedAccount = {

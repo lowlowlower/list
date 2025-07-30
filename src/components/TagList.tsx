@@ -21,6 +21,106 @@ const getRelativeTime = (isoString: string): string => {
     return '刚刚';
 };
 
+const formatInterval = (ms: number): string => {
+    const hours = Math.floor(ms / (1000 * 60 * 60));
+    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+    return `约 ${hours}h ${minutes}m / 次`;
+};
+
+const ScheduleView: React.FC<{ 
+    account: Account;
+    onUpdateTime: (accountName: string, itemId: string, newTime: string) => void;
+    setEditingSchedule: (editState: { accountName: string; id: string; newTime: string } | null) => void;
+    editingSchedule?: { accountName: string; id: string; newTime: string } | null;
+}> = ({ account, onUpdateTime, setEditingSchedule, editingSchedule }) => {
+
+    const schedule = account.todays_schedule || [];
+    const rule = account.scheduling_rule;
+    const now = new Date();
+
+    const upcomingItems = schedule.filter(item => new Date(item.scheduled_at) > now);
+    const nextItem = upcomingItems[0] || null;
+    
+    if (!rule || !rule.items_per_day || rule.items_per_day === 0) {
+        return <div className="text-xs text-gray-500 dark:text-gray-400">未设置规则</div>;
+    }
+    
+    const intervalMs = (18 * 60 * 60 * 1000) / rule.items_per_day;
+
+    // Helper to format date for datetime-local input
+    const formatForInput = (isoDate: string) => {
+        const d = new Date(isoDate);
+        const pad = (num: number) => String(num).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
+    if (!nextItem) {
+        return (
+            <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">无即将到来的计划</div>
+                <div className="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1">{formatInterval(intervalMs)}</div>
+            </div>
+        );
+    }
+    
+    const isEditing = editingSchedule?.id === nextItem.id && editingSchedule?.accountName === account.name;
+
+    if (isEditing) {
+         return (
+            <div key={nextItem.id} className="w-full flex items-center gap-2 p-1.5 bg-blue-200 dark:bg-blue-900/70 rounded-md">
+                <strong className="font-mono text-xs">ID: {nextItem.id}</strong>
+                <input
+                    type="datetime-local"
+                    value={formatForInput(editingSchedule!.newTime)}
+                    onChange={(e) => {
+                        e.stopPropagation();
+                        setEditingSchedule!({ ...editingSchedule!, newTime: e.target.value })
+                    }}
+                    className="flex-grow p-1 border rounded-md text-xs font-mono bg-white dark:bg-gray-700 dark:border-gray-600"
+                    autoFocus
+                    onClick={e => e.stopPropagation()}
+                />
+                <button onClick={(e) => { e.stopPropagation(); onUpdateTime!(account.name, nextItem.id, editingSchedule!.newTime); }} className="text-sm font-bold text-green-600 hover:text-green-700">保存</button>
+                <button onClick={(e) => { e.stopPropagation(); setEditingSchedule!(null); }} className="text-sm text-gray-600 hover:text-gray-800">取消</button>
+            </div>
+        );
+    }
+
+    const scheduledTime = new Date(nextItem.scheduled_at);
+    const displayTime = scheduledTime.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const isPastDue = new Date() > scheduledTime;
+    const hasFailed = isPastDue && !nextItem.isDeployed;
+
+    const itemColor = nextItem.isDeployed ? 'green' : (hasFailed ? 'red' : 'blue'); // Changed color to blue for upcoming items
+    const isDeployed = nextItem.isDeployed;
+
+    return (
+        <div key={nextItem.id} className={`w-full flex justify-between items-center px-2 py-1.5 rounded-md text-xs font-mono bg-${itemColor}-100 dark:bg-${itemColor}-900/50 text-${itemColor}-800 dark:text-${itemColor}-300 group/tag`}>
+            <div className="flex flex-col">
+                <span><strong>ID: {nextItem.id}</strong> @ {displayTime}</span>
+                {hasFailed && <span className="font-sans font-bold text-xs mt-1">投放失败</span>}
+            </div>
+            <div className="flex items-center gap-1.5 opacity-0 group-hover/tag:opacity-100 transition-opacity">
+                {isDeployed && (
+                    <span className="font-sans font-bold text-xs pr-2">✅ 已上架</span>
+                )}
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingSchedule({ accountName: account.name, id: nextItem.id, newTime: nextItem.scheduled_at });
+                    }}
+                    className="p-1 text-lg leading-none rounded-full text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200"
+                    aria-label={`Edit time for ${nextItem.id}`}
+                >
+                    ✏️
+                </button>
+            </div>
+        </div>
+    );
+};
+
+type DeployedItem = { id: string | number; '上架时间': string };
+
 const TagList: React.FC<{ 
     title: string; 
     items: (string | number | ScheduledProduct | { id: string | number; '上架时间': string })[] | null; 
@@ -30,16 +130,14 @@ const TagList: React.FC<{
     onDeleteItem: (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, item: string) => void;
     onRedeploy?: (accountName: string, productId: string) => Promise<void>;
     onShowAllClick?: (accountName: string, items: { id: string | number; '上架时间': string }[]) => void;
-    schedulePreview?: ScheduledProduct[] | null;
-    layout?: 'horizontal' | 'vertical';
-    deployedIds?: (string | number)[] | null;
     // Props for editing schedule time
     editingSchedule?: { accountName: string; id: string; newTime: string } | null;
-    setEditingSchedule?: (editState: { accountName: string; id: string; newTime: string } | null) => void;
-    onUpdateTime?: (accountName: string, itemId: string, newTime: string) => void;
+    setEditingSchedule: (editState: { accountName: string; id: string; newTime: string } | null) => void;
+    onUpdateTime: (accountName: string, itemId: string, newTime: string) => void;
+    account: Account;
 }> = ({ 
     title, items, color, accountName, arrayKey, onDeleteItem, onRedeploy, onShowAllClick,
-    schedulePreview, layout = 'horizontal', deployedIds = [], editingSchedule, setEditingSchedule, onUpdateTime 
+    editingSchedule, setEditingSchedule, onUpdateTime, account 
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
 
@@ -116,11 +214,12 @@ const TagList: React.FC<{
     }
     
     // --- RENDER LOGIC FOR OTHER LISTS (e.g., '今日上架计划') ---
+    if (title === '上架计划') {
+        return <ScheduleView account={account} {...{ onUpdateTime, setEditingSchedule, editingSchedule }} />;
+    }
+
     const renderItems = () => {
-        let displayItems = items;
-        if (schedulePreview && schedulePreview.length > 0) {
-            displayItems = schedulePreview;
-        }
+        const displayItems = items;
 
         if (!displayItems || displayItems.length === 0) {
             return <span className="text-xs text-gray-500 dark:text-gray-400">无</span>;
@@ -174,7 +273,7 @@ const TagList: React.FC<{
 
             // Handle '待上架' scheduled items
             const scheduledItem = item as ScheduledProduct;
-            const isDeployed = deployedIds?.some(id => String(id) === String(scheduledItem.id));
+            const isDeployed = account['已上架']?.some((deployed: DeployedItem) => String(deployed.id) === String(scheduledItem.id));
             const scheduledTime = new Date(scheduledItem.scheduled_at);
             const isPastDue = new Date() > scheduledTime;
             const hasFailed = isPastDue && !isDeployed;
@@ -229,7 +328,7 @@ const TagList: React.FC<{
                             </button>
                         )}
 
-                        {onUpdateTime && setEditingSchedule && !hasFailed && (
+                        {setEditingSchedule && !hasFailed && (
                              <button
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -257,9 +356,7 @@ const TagList: React.FC<{
         });
     };
     
-    const containerClasses = layout === 'vertical' 
-        ? "flex flex-col gap-1.5" 
-        : "flex flex-wrap gap-1";
+    const containerClasses = "flex flex-col gap-1.5";
 
 
     return (

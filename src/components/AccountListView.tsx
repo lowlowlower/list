@@ -8,6 +8,7 @@ import TagList from '@/components/TagList';
 import type { Account, AutomationRun } from '@/types';
 import DeploymentHistoryModal from './DeploymentHistoryModal'; // Import the new modal
 import AutomationLogModal from './Modals/AutomationLogModal'; // Import the log modal
+import {  FaTrash } from 'react-icons/fa';
 
 type DeployedItem = { id: string | number; '上架时间': string };
 interface AccountListViewProps {
@@ -26,7 +27,6 @@ interface AccountListViewProps {
     setEditingSchedule: (editState: { accountName: string; id: string; newTime: string } | null) => void;
     onUpdateScheduleTime: (accountName: string, itemId: string, newTime: string) => void;
     onDeleteItemFromArray: (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, item: string) => void;
-    onRedeploy: (accountName: string, productId: string) => Promise<void>;
     onToggleAutomation: (accountName: string, newStatus: boolean) => void; // New prop for toggling
     fetchAccounts: () => void; // Prop to refresh accounts data from the parent
     // Modals and their state can be passed as props, or handled via children, passing props is simpler for now
@@ -48,7 +48,7 @@ interface AccountListViewProps {
 const AccountListView: React.FC<AccountListViewProps> = ({
     accounts, loading, error, deletingAccount, onDragEnd, onAccountSelect, onDeleteAccount, onSettingsClick,
     onOpenAddAccountModal, onOpenAiAddAccountModal,
-    editingSchedule, setEditingSchedule, onUpdateScheduleTime, onDeleteItemFromArray, onRedeploy, onToggleAutomation,
+    setEditingSchedule, onUpdateScheduleTime, onDeleteItemFromArray, onToggleAutomation,
     isAddAccountModalOpen, closeAddAccountModal, newAccountName, setNewAccountName, newXhsAccount, setNewXhsAccount,
     newXianyuAccount, setNewXianyuAccount, newPhoneModel, setNewPhoneModel, isAddingAccount, onConfirmAddAccount,
     isAiAddAccountModalOpen, closeAiAddAccountModal, aiBatchInput, setAiBatchInput, isAiAddingAccounts, onConfirmAiAddAccounts,
@@ -288,21 +288,83 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                         />
                                                     </div>
                                                     <div className="flex flex-col gap-3 mt-2 border-t dark:border-gray-700 pt-3">
+                                                        {/* ---待上架队列--- */}
                                                         <div>
-                                                            <TagList
-                                                                title="今日上架计划"
-                                                                items={account.todays_schedule || []}
-                                                                color="blue"
-                                                                accountName={account.name}
-                                                                arrayKey='待上架'
-                                                                onDeleteItem={onDeleteItemFromArray}
-                                                                onRedeploy={onRedeploy}
-                                                                layout="vertical"
-                                                                deployedIds={(account['已上架json'] || []).map(item => String(item.id))}
-                                                                editingSchedule={editingSchedule}
-                                                                setEditingSchedule={setEditingSchedule}
-                                                                onUpdateTime={onUpdateScheduleTime}
-                                                            />
+                                                            <div className="flex justify-between items-center mb-2">
+                                                                <h4 className="font-semibold text-sm text-gray-800 dark:text-gray-200">
+                                                                    未来24小时排期
+                                                                </h4>
+                                                                {account.scheduling_rule?.enabled && (
+                                                                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                                        <span>每隔 {(24 / (account.scheduling_rule?.items_per_day || 1)).toFixed(1)}h 上架</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+                                                                {(() => {
+                                                                    const now = new Date();
+                                                                    const futureItems = account.todays_schedule?.filter(item => new Date(item.scheduled_at) > now) || [];
+
+                                                                    if (futureItems.length === 0) {
+                                                                        return (
+                                                                            <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
+                                                                                {account.scheduling_rule?.enabled ? '暂无未来排期' : '自动化已关闭'}
+                                                                            </p>
+                                                                        );
+                                                                    }
+
+                                                                    const firstUpcomingItem = futureItems[0];
+                                                                    const scheduleAnchorTime = new Date(firstUpcomingItem.scheduled_at);
+                                                                    const twentyFourHoursFromAnchor = new Date(scheduleAnchorTime.getTime() + 24 * 60 * 60 * 1000);
+                                                                    
+                                                                    const upcomingSlots = account.todays_schedule?.filter(item => {
+                                                                        const scheduledTime = new Date(item.scheduled_at);
+                                                                        return scheduledTime >= scheduleAnchorTime && scheduledTime < twentyFourHoursFromAnchor;
+                                                                    }) || [];
+
+                                                                    if (upcomingSlots.length === 0) {
+                                                                        return (
+                                                                            <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
+                                                                                {account.scheduling_rule?.enabled ? '未来24小时内暂无排期' : '自动化已关闭'}
+                                                                            </p>
+                                                                        );
+                                                                    }
+
+                                                                    return upcomingSlots.map((item, index) => {
+                                                                        const isPlaceholder = 'isPlaceholder' in item && item.isPlaceholder;
+                                                                        const scheduledTime = new Date(item.scheduled_at);
+                                                                        
+                                                                        const diffMillis = scheduledTime.getTime() - now.getTime();
+                                                                        const diffHours = Math.floor(diffMillis / (1000 * 60 * 60));
+                                                                        const diffMinutes = Math.floor((diffMillis % (1000 * 60 * 60)) / (1000 * 60));
+                                                                        const timeLeft = `${diffHours}h ${diffMinutes}m 后`;
+                                                                        
+                                                                        return (
+                                                                            <div key={item.id} className="group flex justify-between items-center text-xs p-2 rounded-md bg-gray-50 dark:bg-gray-700/50">
+                                                                                <div className="flex-grow">
+                                                                                    {isPlaceholder ? (
+                                                                                        <span className="italic text-gray-500">
+                                                                                            空位 {index + 1} (剩 {timeLeft})
+                                                                                        </span>
+                                                                                    ) : (
+                                                                                        <span className="font-medium text-blue-600 dark:text-blue-400 truncate pr-2" title={`ID: ${item.id}`}>
+                                                                                            ID: {item.id} (剩 {timeLeft})
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                                <div className="flex items-center">
+                                                                                    <span className="text-gray-500 dark:text-gray-400">
+                                                                                        {scheduledTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                                                                                    </span>
+                                                                                    <button onClick={() => onDeleteItemFromArray(account.name, '待上架', String(item.id))} className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700" title="删除此排期">
+                                                                                        <FaTrash size={12} />
+                                                                                    </button>
+                                                                                </div>
+                                                                            </div>
+                                                                        );
+                                                                    });
+                                                                })()}
+                                                            </div>
                                                         </div>
                                                         <div>
                                                             <TagList
@@ -313,6 +375,9 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                                 arrayKey='已上架'
                                                                 onDeleteItem={onDeleteItemFromArray}
                                                                 onShowAllClick={handleShowAllHistory}
+                                                                account={account}
+                                                                setEditingSchedule={setEditingSchedule}
+                                                                onUpdateTime={onUpdateScheduleTime}
                                                             />
                                                         </div>
                                                     </div>
