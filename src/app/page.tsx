@@ -293,73 +293,35 @@ export default function AccountsPage() {
                 const cleanPendingProducts = rawPendingProducts;
                 
                 // --- Generate Today's Schedule Preview ---
-                let todays_schedule: ScheduledProduct[] | null = null;
-                const rule = (acc as Account).scheduling_rule;
+                let todays_schedule: ScheduledProduct[] = [];
 
-                if (rule && rule.items_per_day > 0) {
-                    const now = new Date();
+                // New, simplified, and robust logic:
+                const pendingItems = (acc['待上架'] || []) as (ScheduledProduct | string)[];
 
-                    // 1. Get existing future-scheduled items and unscheduled IDs
-                    const futureScheduledItems = (cleanPendingProducts.filter(item =>
-                        typeof item === 'object' && item !== null && item.scheduled_at && new Date(item.scheduled_at) > now
-                    ) as ScheduledProduct[]).sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+                // Always display all real pending items, regardless of their scheduled date.
+                const realPendingItems = pendingItems
+                    .filter((item): item is ScheduledProduct => {
+                        if (typeof item !== 'object' || item === null) return false;
+                        return !(item as ScheduledProduct).isPlaceholder;
+                    });
 
-                    const unscheduledIds = cleanPendingProducts
-                        .filter(item => typeof item === 'string')
-                        .sort() as string[]; // Sort for deterministic order
+                // Find all placeholders
+                const placeholders = pendingItems
+                    .filter((item): item is ScheduledProduct => {
+                        if (typeof item !== 'object' || item === null) return false;
+                        return (item as ScheduledProduct).isPlaceholder === true;
+                    });
 
-                    const finalSchedule: ScheduledProduct[] = [...futureScheduledItems];
-                    const unscheduledIdsQueue = [...unscheduledIds]; // Create a mutable queue
-
-                    // 2. Determine the starting time for filling empty slots
-                    const intervalMillis = (24 * 60 / rule.items_per_day) * 60 * 1000;
-                    let nextScheduleTime: number;
-
-                    const lastScheduledItem = finalSchedule.length > 0 ? finalSchedule[finalSchedule.length - 1] : null;
-
-                    if (lastScheduledItem) {
-                        // Schedule relative to the last existing item
-                        nextScheduleTime = new Date(lastScheduledItem.scheduled_at).getTime() + intervalMillis;
-                    } else {
-                        // First item, schedule it predictably
-                        nextScheduleTime = now.getTime() + 10 * 60 * 1000; // 10 mins from now
-                    }
-                    
-                    // Ensure the first new item is not in the past
-                    if (nextScheduleTime < now.getTime()) {
-                        nextScheduleTime = now.getTime() + 10 * 60 * 1000;
-                    }
-                    
-                    // 3. Fill the schedule up to the desired number of items
-                    const placeholderBaseIndex = finalSchedule.filter(item => item.isPlaceholder).length;
-                    let placeholderCounter = 1;
-                    
-                    while (finalSchedule.length < rule.items_per_day) {
-                        const nextProductId = unscheduledIdsQueue.shift();
-
-                        if (nextProductId) {
-                            // Add a real product
-                        finalSchedule.push({
-                                id: nextProductId,
-                                scheduled_at: new Date(nextScheduleTime).toISOString(),
-                            isPlaceholder: false,
-                        });
-                        } else {
-                            // Add a placeholder
-                            finalSchedule.push({
-                                id: `待定商品 ${placeholderBaseIndex + placeholderCounter}`,
-                                scheduled_at: new Date(nextScheduleTime).toISOString(),
-                                isPlaceholder: true,
-                            });
-                            placeholderCounter++;
-                        }
-                        nextScheduleTime += intervalMillis;
-                    }
-                    
-                    // 4. Sort and assign
-                    finalSchedule.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-                    todays_schedule = finalSchedule;
-                }
+                // Combine them
+                todays_schedule = [...realPendingItems, ...placeholders];
+                
+                // Sort the final list by date to ensure chronological order
+                todays_schedule.sort((a, b) => {
+                    const timeA = a.scheduled_at ? new Date(a.scheduled_at).getTime() : Infinity;
+                    const timeB = b.scheduled_at ? new Date(b.scheduled_at).getTime() : Infinity;
+                    return timeA - timeB;
+                });
+                
                 // --- End of Schedule Generation ---
 
                 return {
@@ -1692,6 +1654,7 @@ ${aiBatchInput}
                 aiBatchInput={aiBatchInput} setAiBatchInput={setAiBatchInput}
                 isAiAddingAccounts={isAiAddingAccounts}
                 onConfirmAiAddAccounts={handleAiBatchAddAccounts}
+                fetchAccounts={fetchAccounts}
             />
             {editingAccount && (
                 <SettingsModal

@@ -133,13 +133,16 @@ const TagList: React.FC<{
             return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
         };
 
+        let placeholderRenderIndex = 1;
+
         return displayItems.map((item, index) => {
             // Handle placeholders in '待上架'
             if (typeof item === 'object' && item !== null && (item as ScheduledProduct).isPlaceholder) {
                 const placeholder = item as ScheduledProduct;
+                const displayId = `待定商品 ${placeholderRenderIndex++}`;
                 return (
                     <div key={`placeholder-${index}`} className="w-full text-xs font-mono bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border border-dashed border-gray-400 dark:border-gray-600 px-2 py-1.5 rounded-md">
-                        <span>{placeholder.id}</span>
+                        <span>{displayId}</span>
                         <span className="float-right font-sans"> (预计 @ {new Date(placeholder.scheduled_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })})</span>
                     </div>
                 );

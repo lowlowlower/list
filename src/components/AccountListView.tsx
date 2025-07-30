@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import Image from 'next/image';
 import Switch from 'react-switch'; // Import the switch component
@@ -28,6 +28,7 @@ interface AccountListViewProps {
     onDeleteItemFromArray: (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, item: string) => void;
     onRedeploy: (accountName: string, productId: string) => Promise<void>;
     onToggleAutomation: (accountName: string, newStatus: boolean) => void; // New prop for toggling
+    fetchAccounts: () => void; // Prop to refresh accounts data from the parent
     // Modals and their state can be passed as props, or handled via children, passing props is simpler for now
     isAddAccountModalOpen: boolean;
     closeAddAccountModal: () => void;
@@ -50,19 +51,34 @@ const AccountListView: React.FC<AccountListViewProps> = ({
     editingSchedule, setEditingSchedule, onUpdateScheduleTime, onDeleteItemFromArray, onRedeploy, onToggleAutomation,
     isAddAccountModalOpen, closeAddAccountModal, newAccountName, setNewAccountName, newXhsAccount, setNewXhsAccount,
     newXianyuAccount, setNewXianyuAccount, newPhoneModel, setNewPhoneModel, isAddingAccount, onConfirmAddAccount,
-    isAiAddAccountModalOpen, closeAiAddAccountModal, aiBatchInput, setAiBatchInput, isAiAddingAccounts, onConfirmAiAddAccounts
+    isAiAddAccountModalOpen, closeAiAddAccountModal, aiBatchInput, setAiBatchInput, isAiAddingAccounts, onConfirmAiAddAccounts,
+    fetchAccounts
 }) => {
     // State for the new deployment history modal
     const [historyModalData, setHistoryModalData] = useState<{ accountName: string; items: DeployedItem[] } | null>(null);
     const [automationStatus, setAutomationStatus] = useState<AutomationRun[]>([]);
     const [isLogModalOpen, setIsLogModalOpen] = useState(false); // State for the log modal
+    const prevAutomationStatusRef = useRef<AutomationRun[]>([]);
 
     useEffect(() => {
         const fetchStatus = async () => {
             try {
                 const response = await fetch('/api/get-automation-status');
                 const data: AutomationRun[] = await response.json();
+                
+                // --- This is the new, smart logic ---
+                // Check if a task has just finished
+                const justFinishedAccounts = prevAutomationStatusRef.current
+                    .filter(prevRun => !data.some(currentRun => currentRun.account_name === prevRun.account_name))
+                    .map(run => run.account_name);
+
+                if (justFinishedAccounts.length > 0) {
+                    console.log('Automation task finished for:', justFinishedAccounts.join(', '), '. Refetching accounts.');
+                    fetchAccounts(); // Call the function from parent to refresh data
+                }
+                
                 setAutomationStatus(data);
+                prevAutomationStatusRef.current = data; // Update the previous state ref
             } catch (error) {
                 console.error("Failed to fetch automation status:", error);
             }
@@ -72,7 +88,7 @@ const AccountListView: React.FC<AccountListViewProps> = ({
         const intervalId = setInterval(fetchStatus, 5000); // And then every 5 seconds
 
         return () => clearInterval(intervalId); // Cleanup on unmount
-    }, []);
+    }, [fetchAccounts]);
 
     const handleShowAllHistory = (accountName: string, items: DeployedItem[]) => {
         setHistoryModalData({ accountName, items });
