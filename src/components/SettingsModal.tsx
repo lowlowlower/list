@@ -13,6 +13,8 @@ interface SettingsModalProps {
   onResetSchedule: (accountName: string) => void; // Add new prop
   onNavigateToKeywords: (account: Account) => void;
   
+  isSubmitting: boolean; // For modal buttons
+
   editingCopywritingPrompts: { [key: string]: string };
   setEditingCopywritingPrompts: React.Dispatch<React.SetStateAction<{ [key: string]: string }>>;
   
@@ -60,6 +62,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   editingRules, setEditingRules,
   loadingStates,
   now,
+  isSubmitting, // Add new prop
 }) => {
     
     const handleRuleChange = (accountName: string, value: string) => {
@@ -253,16 +256,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   onClick={() => onSaveRule(account.name)}
-                  disabled={loadingStates[account.name]?.saveRule}
+                  disabled={isSubmitting}
                   className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {loadingStates[account.name]?.saveRule ? '保存中...' : '保存规则'}
+                  {isSubmitting ? '保存中...' : '保存规则'}
                 </button>
                 <button 
                   onClick={() => onResetSchedule(account.name)}
+                  disabled={isSubmitting}
                   className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {loadingStates[account.name]?.saveRule ? '重置中...' : '重置排期'}
+                  {isSubmitting ? '重置中...' : '重置排期'}
                 </button>
               </div>
 

@@ -203,14 +203,13 @@ export default function AccountsPage() {
     // const [savingPrompt, setSavingPrompt] = useState<boolean>(false);
     // const [promptError, setPromptError] = useState<string | null>(null);
 
+    const [isSubmitting, setIsSubmitting] = useState<boolean>(false); // For modal buttons
+    const [accounts, setAccounts] = useState<Account[]>([]); // Filtered accounts for display
 
-    // --- Authentication Logic ---
+    // This effect ensures the filtered 'accounts' list is updated when 'allAccounts' changes (e.g., after fetching or dnd)
     useEffect(() => {
-        // Check session storage to see if user is already authenticated
-        if (sessionStorage.getItem('isAuthenticated') === 'true') {
-            setIsAuthenticated(true);
-        }
-    }, []);
+        setAccounts(allAccounts);
+    }, [allAccounts]);
 
     useEffect(() => {
         const interval = setInterval(() => {
@@ -406,6 +405,7 @@ export default function AccountsPage() {
             });
             
             setAllAccounts(mergedAccounts as Account[]);
+            setAccounts(mergedAccounts as Account[]); // Also initialize the filtered list
             setEditingKeywords(initialEditingKeywords);
             setEditingKeywordPrompts(initialKeywordPrompts);
             setEditingBusinessPrompts(initialBusinessPrompts);
@@ -1183,61 +1183,102 @@ export default function AccountsPage() {
 
 
     const handleSaveRule = async (accountName: string) => {
-        setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: true } }));
-        
-        const items_per_day_input = editingRules[accountName]?.items_per_day;
-        const items_per_day = (typeof items_per_day_input === 'number' && items_per_day_input > 0) 
-            ? items_per_day_input 
-            : 0;
-
-        const accountToUpdate = allAccounts.find(acc => acc.name === accountName);
-        if (!accountToUpdate) {
-            alert('错误: 找不到要更新的账号。');
-            setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: false } }));
-            return;
-        }
-
-        const ruleToSave = { 
-            items_per_day,
-            enabled: accountToUpdate.scheduling_rule?.enabled ?? true // Enable by default when setting a rule
-        };
-
-        // --- NEW CORE LOGIC: Always generate a fresh schedule from now ---
-        const newPendingQueue: ScheduledProduct[] = [];
-            if (items_per_day > 0) {
-            const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
-            // Use a 10-minute buffer as requested
-            const startTime = new Date().getTime() + 10 * 60 * 1000; 
+        setIsSubmitting(true);
+        try {
+            const items_per_day = editingRules[accountName]?.items_per_day || 0;
+            const newPendingQueue: ScheduledProduct[] = [];
             
-            for (let i = 0; i < items_per_day; i++) {
-                const nextScheduleTime = startTime + intervalMillis * i;
+            if (items_per_day > 0) {
+                const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
+                const startTime = new Date().getTime() + 10 * 60 * 1000;
+                
+                for (let i = 0; i < items_per_day; i++) {
+                    const nextScheduleTime = startTime + intervalMillis * i;
                     newPendingQueue.push({
-                    id: `待定商品 ${i + 1}`,
+                        id: `待定商品 ${i + 1}`,
                         scheduled_at: new Date(nextScheduleTime).toISOString(),
                         isPlaceholder: true,
                     });
                 }
             }
             
-        try {
-            const { error } = await supabase
-                .from('accounts_duplicate')
-                .update({ 
-                    scheduling_rule: ruleToSave, 
-                    '待上架': newPendingQueue,
-                    updated_at: new Date().toISOString() 
-                })
-                .eq('name', accountName);
-            
-            if (error) throw error;
-            
-            alert('排期规则保存并生成成功！');
-            await fetchAccounts();
+            const updatedFrontendData = {
+                scheduling_rule: { enabled: true, items_per_day },
+                '待上架': newPendingQueue,
+                todays_schedule: newPendingQueue,
+            };
+    
+            const updater = (prev: Account[]) => prev.map(acc => 
+                acc.name === accountName
+                    ? { ...acc, ...updatedFrontendData }
+                    : acc
+            );
 
-        } catch (err: unknown) {
-            alert(`保存规则失败: ${getErrorMessage(err)}`);
+            // Update both states
+            setAccounts(updater);
+            setAllAccounts(updater);
+            
+            // Also update the database rule, but not the schedule
+            supabase.from('accounts_duplicate').update({
+                scheduling_rule: updatedFrontendData.scheduling_rule
+            }).eq('name', accountName).then(({error}) => {
+                if(error) console.error("Failed to save rule to DB", error);
+            });
+
+        } catch (error) {
+            console.error('Failed to update rule on frontend:', error);
+            alert(`更新规则失败: ${getErrorMessage(error)}`);
         } finally {
-             setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: false } }));
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleResetSchedule = async (accountName: string) => {
+        setIsSubmitting(true);
+        try {
+            const account = allAccounts.find(a => a.name === accountName);
+            if (!account || !account.scheduling_rule) {
+                alert('未找到该账号或其排期规则');
+                return;
+            }
+            
+            const { items_per_day } = account.scheduling_rule;
+            const newPendingQueue: ScheduledProduct[] = [];
+
+            if (items_per_day > 0) {
+                const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
+                const startTime = new Date().getTime() + 10 * 60 * 1000;
+                
+                for (let i = 0; i < items_per_day; i++) {
+                    const nextScheduleTime = startTime + intervalMillis * i;
+                    newPendingQueue.push({
+                        id: `待定商品 ${i + 1}`,
+                        scheduled_at: new Date(nextScheduleTime).toISOString(),
+                        isPlaceholder: true,
+                    });
+                }
+            }
+
+            const updatedFrontendData = {
+                '待上架': newPendingQueue,
+                todays_schedule: newPendingQueue,
+            };
+
+            const updater = (prev: Account[]) => prev.map(acc => 
+                acc.name === accountName
+                    ? { ...acc, ...updatedFrontendData }
+                    : acc
+            );
+            
+            // Update both states
+            setAccounts(updater);
+            setAllAccounts(updater);
+
+        } catch (error) {
+            console.error('Failed to reset schedule on frontend:', error);
+            alert(`重置排期失败: ${getErrorMessage(error)}`);
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -1559,60 +1600,6 @@ ${aiBatchInput}
         }
     };
 
-    const handleResetSchedule = async (accountName: string) => {
-        if (!confirm(`您确定要重置【${accountName}】的排期吗？\n\n此操作会清空所有当前的待上架安排，并根据现有规则重新生成一套全新的排期。`)) {
-            return;
-        }
-
-        setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: true } }));
-
-        const accountToUpdate = allAccounts.find(acc => acc.name === accountName);
-        if (!accountToUpdate) {
-            alert('错误: 找不到要更新的账号。');
-            setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: false } }));
-            return;
-        }
-
-        const items_per_day = accountToUpdate.scheduling_rule?.items_per_day ?? 0;
-        
-        // --- REUSE THE SAME CORE LOGIC ---
-        const newPendingQueue: ScheduledProduct[] = [];
-        if (items_per_day > 0) {
-            const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
-            // Use a 10-minute buffer as requested
-            const startTime = new Date().getTime() + 10 * 60 * 1000;
-            
-            for (let i = 0; i < items_per_day; i++) {
-                const nextScheduleTime = startTime + intervalMillis * i;
-                newPendingQueue.push({
-                    id: `待定商品 ${i + 1}`,
-                    scheduled_at: new Date(nextScheduleTime).toISOString(),
-                    isPlaceholder: true,
-                });
-            }
-        }
-
-        try {
-            const { error } = await supabase
-                .from('accounts_duplicate')
-                .update({ 
-                    '待上架': newPendingQueue,
-                    updated_at: new Date().toISOString() 
-                })
-                .eq('name', accountName);
-            
-            if (error) throw error;
-            
-            alert('排期重置成功！');
-            await fetchAccounts();
-
-        } catch (err: unknown) {
-            alert(`重置排期失败: ${getErrorMessage(err)}`);
-        } finally {
-             setLoadingStates(prev => ({ ...prev, [accountName]: { ...prev[accountName], saveRule: false } }));
-        }
-    };
-
     // --- RENDER LOGIC ---
 
     // Render Password Lock View
@@ -1697,7 +1684,7 @@ ${aiBatchInput}
                                                return (
         <>
             <AccountListView
-                accounts={allAccounts}
+                accounts={accounts} // Use the filtered state for display
                 loading={loadingAccounts}
                 error={errorAccounts}
                 deletingAccount={deletingAccount}
@@ -1740,8 +1727,8 @@ ${aiBatchInput}
                     onSaveField={handleSaveAccountField}
                     onSaveKeywords={handleSaveKeywords}
                     onGenerateKeywords={handleGenerateKeywords}
-                    onSaveRule={handleSaveRule}
-                    onResetSchedule={handleResetSchedule}
+                    onSaveRule={() => handleSaveRule(editingAccount.name)} // Pass only the name
+                    onResetSchedule={() => handleResetSchedule(editingAccount.name)} // Pass only the name
                     onNavigateToKeywords={handleAccountSelectForKeywords}
                     editingCopywritingPrompts={editingCopywritingPrompts}
                     setEditingCopywritingPrompts={setEditingCopywritingPrompts}
@@ -1760,6 +1747,7 @@ ${aiBatchInput}
                     editingRules={editingRules}
                     setEditingRules={setEditingRules}
                     loadingStates={loadingStates}
+                    isSubmitting={isSubmitting} // Pass the new submitting state
                     now={now}
                 />
             )}
