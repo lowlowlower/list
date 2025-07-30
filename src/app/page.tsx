@@ -290,39 +290,58 @@ export default function AccountsPage() {
                 // --- Data Reconciliation ---
                 // Allow products to be re-scheduled even if already in '已上架'
                 const rawPendingProducts = (acc as Account)['待上架'] || [];
-                const cleanPendingProducts = rawPendingProducts;
+                const cleanPendingProducts = Array.isArray(rawPendingProducts) 
+                    ? rawPendingProducts.filter(p => p !== null && p !== undefined)
+                    : [];
                 
                 // --- Generate Today's Schedule Preview ---
                 let todays_schedule: ScheduledProduct[] = [];
+                const rule = acc.scheduling_rule;
 
-                // New, simplified, and robust logic:
-                const pendingItems = (acc['待上架'] || []) as (ScheduledProduct | string)[];
-
-                // Always display all real pending items, regardless of their scheduled date.
-                const realPendingItems = pendingItems
-                    .filter((item): item is ScheduledProduct => {
-                        if (typeof item !== 'object' || item === null) return false;
-                        return !(item as ScheduledProduct).isPlaceholder;
-                    });
-
-                // Find all placeholders
-                const placeholders = pendingItems
-                    .filter((item): item is ScheduledProduct => {
-                        if (typeof item !== 'object' || item === null) return false;
-                        return (item as ScheduledProduct).isPlaceholder === true;
-                    });
-
-                // Combine them
-                todays_schedule = [...realPendingItems, ...placeholders];
+                // 1. Start with all real, pending items from the database that have a scheduled time
+                const realPendingItems = cleanPendingProducts
+                    .filter((item): item is ScheduledProduct => 
+                        typeof item === 'object' && item.isPlaceholder === false && !!item.scheduled_at
+                    );
                 
-                // Sort the final list by date to ensure chronological order
+                todays_schedule = [...realPendingItems];
+
+                // 2. If a rule exists, dynamically fill the list with placeholders to meet the target count
+                if (rule && rule.items_per_day > 0) {
+                    const targetCount = rule.items_per_day;
+                    const intervalMillis = (18 * 60 * 60 * 1000) / targetCount;
+                    
+                    let lastScheduleTime = Math.max(
+                        new Date().getTime(), // Start calculating from now
+                        ...todays_schedule.map(item => new Date(item.scheduled_at).getTime())
+                    );
+
+                    // Find the highest existing placeholder number to continue from there
+                    const placeholderNumbers = cleanPendingProducts
+                        .filter((item): item is ScheduledProduct => typeof item === 'object' && item.isPlaceholder === true && typeof item.id === 'string' && item.id.startsWith('待定商品'))
+                        .map(item => parseInt(item.id.replace('待定商品 ', ''), 10))
+                        .filter(num => !isNaN(num));
+                    let placeholderCounter = placeholderNumbers.length > 0 ? Math.max(...placeholderNumbers) + 1 : 1;
+
+                    while (todays_schedule.length < targetCount) {
+                        const nextScheduleTime = lastScheduleTime + intervalMillis;
+                        todays_schedule.push({
+                            id: `待定商品 ${placeholderCounter++}`,
+                            scheduled_at: new Date(nextScheduleTime).toISOString(),
+                            isPlaceholder: true,
+                        });
+                        lastScheduleTime = nextScheduleTime;
+                    }
+                }
+
+                // 3. Sort the final list chronologically
                 todays_schedule.sort((a, b) => {
-                    const timeA = a.scheduled_at ? new Date(a.scheduled_at).getTime() : Infinity;
-                    const timeB = b.scheduled_at ? new Date(b.scheduled_at).getTime() : Infinity;
+                    if (!a.scheduled_at || !b.scheduled_at) return 0;
+                    const timeA = new Date(a.scheduled_at).getTime();
+                    const timeB = new Date(b.scheduled_at).getTime();
                     return timeA - timeB;
                 });
-                
-                // --- End of Schedule Generation ---
+                // --- END OF NEW LOGIC ---
 
                 return {
                     ...acc,
