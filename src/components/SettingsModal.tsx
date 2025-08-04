@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import type { Account } from '@/types'; // Assuming types.ts is in src/
+import type { Account } from '@/types';
 
 interface SettingsModalProps {
   account: Account;
@@ -9,12 +9,12 @@ interface SettingsModalProps {
   onSaveField: (accountName: string, field: '关键词prompt' | '业务描述' | '文案生成prompt' | 'xhs_account' | '闲鱼账号' | '手机型号', value: string) => Promise<void>;
   onSaveKeywords: (accountName: string) => Promise<void>;
   onGenerateKeywords: (accountName: string) => Promise<void>;
-  onSaveRule: (accountName: string) => Promise<void>;
-  onResetSchedule: (accountName: string) => void; // Add new prop
+  onSaveRule: (accountName: string, scheduleTemplate: string[]) => Promise<void>;
+  onResetSchedule: (accountName: string) => void;
   onNavigateToKeywords: (account: Account) => void;
   
-  isSubmitting: boolean; // For modal buttons
-
+  isSubmitting: boolean;
+  
   editingCopywritingPrompts: { [key: string]: string };
   setEditingCopywritingPrompts: React.Dispatch<React.SetStateAction<{ [key: string]: string }>>;
   
@@ -36,11 +36,7 @@ interface SettingsModalProps {
   editingPhone: { [key: string]: string };
   setEditingPhone: React.Dispatch<React.SetStateAction<{ [key: string]: string }>>;
   
-  editingRules: { [key: string]: { items_per_day: number | '' } };
-  setEditingRules: React.Dispatch<React.SetStateAction<{ [key: string]: { items_per_day: number | '' } }>>;
-
   loadingStates: { [key: string]: { ai?: boolean; saveKeywords?: boolean; saveKwPrompt?: boolean; saveBizPrompt?: boolean; saveCopyPrompt?: boolean; saveRule?: boolean; } };
-  now: Date;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -50,7 +46,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveKeywords,
   onGenerateKeywords,
   onSaveRule,
-  onResetSchedule, // Add new prop
+  onResetSchedule,
   onNavigateToKeywords,
   editingCopywritingPrompts, setEditingCopywritingPrompts,
   editingBusinessPrompts, setEditingBusinessPrompts,
@@ -59,27 +55,35 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   editingXhs, setEditingXhs,
   editingXianyu, setEditingXianyu,
   editingPhone, setEditingPhone,
-  editingRules, setEditingRules,
   loadingStates,
-  now,
-  isSubmitting, // Add new prop
+  isSubmitting,
 }) => {
     
-    const handleRuleChange = (accountName: string, value: string) => {
-        if (value === '') {
-             setEditingRules(prev => ({ ...prev, [accountName]: { ...prev[accountName], items_per_day: '' } }));
-            return;
+    const [scheduleTemplate, setScheduleTemplate] = React.useState<string[]>([]);
+
+    React.useEffect(() => {
+        const existingTemplate = account.schedule_template;
+        if (existingTemplate && Array.isArray(existingTemplate) && existingTemplate.length > 0) {
+            setScheduleTemplate(existingTemplate.map(time => String(time || '')));
+        } else {
+            // Provide a default, user-friendly template if none exists
+            setScheduleTemplate(['09:00', '12:00', '15:00', '18:00', '21:00']);
         }
-        const numValue = parseInt(value, 10);
-        if (!isNaN(numValue) && numValue >= 0) {
-            setEditingRules(prev => ({
-                ...prev,
-                [accountName]: {
-                    ...prev[accountName],
-                    items_per_day: numValue,
-                }
-            }));
-        }
+    }, [account]);
+
+    const handleTemplateChange = (index: number, value: string) => {
+        const newTemplate = [...scheduleTemplate];
+        newTemplate[index] = value;
+        setScheduleTemplate(newTemplate);
+    };
+
+    const addTemplateTime = () => {
+        setScheduleTemplate([...scheduleTemplate, '']);
+    };
+
+    const removeTemplateTime = (index: number) => {
+        const newTemplate = scheduleTemplate.filter((_, i) => i !== index);
+        setScheduleTemplate(newTemplate);
     };
 
   return (
@@ -92,10 +96,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           <button onClick={onClose} className="text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100 text-2xl font-bold">&times;</button>
         </div>
         
-        {/* Settings Content Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
-          {/* Column 1: Prompts */}
           <div className="space-y-4 p-4 border rounded-lg bg-gray-50 dark:bg-gray-800/50">
             <h3 className="text-lg font-semibold border-b pb-2">🤖 AI 提示词管理</h3>
             <div>
@@ -149,7 +151,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Column 2: Keywords & Assets */}
           <div className="space-y-4 p-4 border rounded-lg bg-gray-50 dark:bg-gray-800/50">
             <h3 className="text-lg font-semibold border-b pb-2">⚙️ 核心资产与关键词</h3>
             <div>
@@ -236,79 +237,64 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             </div>
-            {/* Scheduling Section */}
+            
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold border-b pb-2 mb-3">🗓️ 上架规则设置</h3>
-              <div className="space-y-2">
-                <div>
-                  <label htmlFor={`itemsPerDay-${account.name}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">每日自动上架数量</label>
-                  <p className="text-xs text-gray-500 mb-2">设置后，系统将按此规则运作。设为0或置空则取消规则。</p>
-                  <input
-                    type="number"
-                    id={`itemsPerDay-${account.name}`}
-                    value={editingRules[account.name]?.items_per_day || ''}
-                    onChange={(e) => handleRuleChange(account.name, e.target.value)}
-                    className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    placeholder="例如: 5"
-                  />
+              <h3 className="text-lg font-semibold border-b pb-2 mb-3">🗓️ 每日上架时刻表</h3>
+               <p className="text-xs text-gray-500 mb-2">设定每天自动上架的精确时间点。此模板将每日重复使用。</p>
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                    {scheduleTemplate.map((time, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                            <input
+                                type="time"
+                                value={time}
+                                onChange={(e) => handleTemplateChange(index, e.target.value)}
+                                className="w-full px-3 py-2 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            />
+                            <button
+                                onClick={() => removeTemplateTime(index)}
+                                className="px-3 py-2 text-sm font-medium text-white bg-red-500 rounded-md hover:bg-red-600"
+                            >
+                                &ndash;
+                            </button>
+                        </div>
+                    ))}
                 </div>
-              </div>
+                <button
+                    onClick={addTemplateTime}
+                    className="w-full mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-md hover:bg-blue-600"
+                >
+                    + 添加时间点
+                </button>
+              
               <div className="mt-4 flex justify-end gap-2">
                 <button
-                  onClick={() => onSaveRule(account.name)}
+                  onClick={() => onSaveRule(account.name, scheduleTemplate)}
                   disabled={isSubmitting}
                   className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting ? '保存中...' : '保存规则'}
+                  {isSubmitting ? '保存中...' : '保存时刻表'}
                 </button>
                 <button 
                   onClick={() => onResetSchedule(account.name)}
                   disabled={isSubmitting}
                   className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting ? '重置中...' : '重置排期'}
+                  {isSubmitting ? '重置中...' : '清空已排期'}
                 </button>
               </div>
 
-              {(() => {
-                if (!account) return null;
-                const ruleItems = editingRules[account.name]?.items_per_day;
-                const pendingItems = account['待上架'] || [];
-                
-                if (!ruleItems || ruleItems <= 0) return null;
-
-                const futureScheduledItems = (pendingItems
-                    .filter(item => typeof item === 'object' && item.scheduled_at) as { id: string; scheduled_at: string }[])
-                    .filter(item => new Date(item.scheduled_at).getTime() > now.getTime())
-                    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-
-                const unscheduledCount = pendingItems.filter(item => typeof item === 'string').length;
-                const scheduledCount = futureScheduledItems.length;
-                const emptySlots = ruleItems - scheduledCount > 0 ? ruleItems - scheduledCount : 0;
-                
-
-                return (
-                    <div className="mt-4 p-3 rounded-md border bg-blue-50 border-blue-200 dark:bg-blue-900/30 dark:border-blue-800">
-                        <h4 className="text-sm font-semibold mb-2 text-blue-800 dark:text-blue-200">今日上架计划 (规则: {ruleItems}个/天)</h4>
-                        <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
-                            {futureScheduledItems.map(item => (
-                                <p key={item.id} className="truncate">
-                                    • ID: {item.id} (预计: {new Date(item.scheduled_at).toLocaleTimeString('zh-CN')})
-                                </p>
-                            ))}
-                            {emptySlots > 0 && Array.from({ length: emptySlots }).map((_, index) => (
-                                <p key={`empty-${index}`} className="text-gray-400 dark:text-gray-500 italic">
-                                    • [空闲排期位]
-                                </p>
-                            ))}
-                        </div>
-                        <div className="mt-2 pt-2 border-t border-blue-200 dark:border-blue-700 text-xs space-y-0.5">
-                            <p className="font-medium">• {scheduledCount} / {ruleItems} 个位置已预定。</p>
-                            <p className="text-gray-600 dark:text-gray-400">• {unscheduledCount} 个商品在队列中等待排期。</p>
-                        </div>
+                <div className="mt-4 p-3 rounded-md border bg-blue-50 border-blue-200 dark:bg-blue-900/30 dark:border-blue-800">
+                    <h4 className="text-sm font-semibold mb-2 text-blue-800 dark:text-blue-200">
+                        今日排期预览 (共 {scheduleTemplate.filter(t => t).length} 个)
+                    </h4>
+                    <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
+                        {scheduleTemplate.filter(t => t).sort().map((time, index) => (
+                             <p key={`preview-${index}`} className="text-gray-600 dark:text-gray-300">
+                                 • 预计上架于: <span className="font-semibold">{time}</span>
+                             </p>
+                        ))}
                     </div>
-                );
-              })()}
+                </div>
             </div>
           </div>
         </div>

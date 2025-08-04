@@ -113,6 +113,7 @@ export type Account = {
   'xhs_头像': string | null;
   keywords?: string | null;
   scheduling_rule?: { enabled?: boolean; items_per_day: number } | null;
+  schedule_template?: string[] | null; // For precise daily scheduling
   todays_schedule?: ScheduledProduct[] | null;
   today_new_products?: number;
   isPending?: boolean;

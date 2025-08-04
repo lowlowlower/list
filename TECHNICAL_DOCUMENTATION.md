@@ -1,98 +1,183 @@
-
+ 
 # 技术文档：上架计划 (Listing Plan)
 
-## 1. 概述
+## 1. 核心思想：传送带 (Conveyor Belt) 模型
 
-“上架计划”是一个自动化系统，旨在根据预设的规则，定时为不同“账户”（店铺）发布新产品。该系统由两部分组成：
+本项目最核心的机制是“传送带”模型。您可以将其想象成一条持续向未来滚动的传送带，上面有固定数量的“托盘”（即排期）。
 
-*   **前端配置界面**：允许用户为每个账户设置每日上架商品数量、查看和管理待上架队列。
-*   **后端自动化任务**：一个由 Cron Job 调度的 Serverless Function，负责在后台执行实际的上架逻辑。
+*   **数量恒定**: 传送带上的托盘总数（由“每日上架数量”规则定义）永远不变。
+*   **无限滚动**: 当时间流逝，一个托盘从传送带的头部掉落（即任务时间已过），系统会自动在传送带的尾部补充一个新的空托盘。
+*   **萝卜坑**: 每个托盘就是一个“萝卜坑”。它可以是空的（`isPlaceholder: true`），等待真实商品放入；也可以被真实商品占据。
+*   **前端即仪表盘**: 用户界面是这个传送带的仪表盘，实时显示未来24小时内所有托盘的状态（是空是满，以及预计到达时间）。
 
-本文档将重点阐述其核心业务逻辑和技术实现。
+这个模型保证了上架节奏的绝对稳定和无限持续。
 
-## 2. 核心组件：后端上架任务 (`trigger-job`)
+---
 
-后端任务是整个上架计划的中枢。它是一个通过 `GET` 请求触发的 API 路由，设计为由定时任务（如 Vercel Cron Job）定期调用。
+## 2. 前端交互与状态管理 (`page.tsx`)
+
+前端使用 React 和 State Management 来驱动所有用户交互，并实现了部分操作的“前端优先”，以提供流畅体验。
+
+#### 2.1 规则设置与重置 (纯前端操作)
+
+这是一个关键改动点：**设置规则和重置排期是纯前端的“预览”操作，不会立即写入数据库。**
+
+*   **`handleSaveRule` (保存规则)**:
+    1.  当用户在设置中保存“每日上架数量”时，此函数被触发。
+    2.  它**只在浏览器中**清空当前账户的待上架队列。
+    3.  然后，它根据新规则（例如每天4个），从当前时间（+10分钟缓冲）开始，计算出所有未来时间点，并生成一套全新的“空托盘”（占位符）。
+    4.  这个新生成的排期**仅更新前端React状态**，让用户可以立刻看到新的排期计划。
+    5.  只有规则本身（例如 `items_per_day: 4`）会被保存到数据库，而新生成的占位符队列则不会。
+
+*   **`handleResetSchedule` (重置排期)**:
+    1.  逻辑与 `handleSaveRule` 完全相同。
+    2.  它会读取当前已保存的规则，并**仅在前端**生成一套全新的、干净的占位符排期。
+
+#### 2.2 上架：填充空位 (`handleDeployProduct`)
+
+这是将真实商品放入传送带“空托盘”的过程。
+
+1.  **扫描队列**: 当用户投放一个商品时，系统会扫描该账户的待上架队列。
+2.  **寻找空位**: 寻找第一个 `isPlaceholder: true` 的占位符。
+3.  **填充**: 将真实商品的ID放入该托盘，并**完全继承该托盘原有的 `scheduled_at` 时间戳**。
+4.  **更新数据库**: 此操作会**触发数据库写入**，将更新后的整个队列保存到Supabase。
+
+#### 2.3 删除：留坑或滚动 (`handleDeleteItemFromArray`)
+
+删除操作会根据对象的不同触发不同的“传送带”逻辑。
+
+1.  **删除真实商品（留坑）**: 如果用户删除的是一个已排期的真实商品，该商品所在的“托盘”**不会被移除**。它会自动变回一个空的占位符，但**保留原有的时间戳**，等待新的商品来填充。此操作会**更新数据库**。
+2.  **删除占位符（滚动）**: 只有当用户删除一个占位符时，传送带才会“滚动”。
+    *   系统会移除这个占位符。
+    *   然后立即在队列的**末尾补充一个新的占位符**。
+    *   新占位符的时间戳，会根据队尾最后一个任务的时间和规则间隔计算得出。
+    *   此操作会**更新数据库**，确保队列总长度不变。
+
+#### 2.4 “传送带”自动滚动 (`useEffect` Hook)
+
+这是实现无限滚动的核心。
+
+1.  **定时检查**: `page.tsx` 中有一个 `useEffect` hook，它每分钟执行一次。
+2.  **扫描所有账户**: 它会遍历所有账户的 `todays_schedule`。
+3.  **清理过时的占位符**: 找到所有 `scheduled_at` 时间早于当前时间的 **占位符 (Placeholder)**。**关键：它不会触碰已过期的真实商品**，那些任务必须由后端 `trigger-job` 来处理。
+4.  **补充新任务**: 每清理一个过时占位符，它就会在队列末尾计算并添加一个新的占位符，以维持总数不变。
+5.  **更新数据库**: 如果发生了滚动（有占位符被清理和补充），这个 `useEffect` hook 会将更新后的队列**保存到数据库**。
+
+---
+
+## 3. 后端自动化任务 (`trigger-job`)
+
+后端任务是传送带的“卸货员”，它只负责处理传送带最前端的那个**已填充的**托盘。
 
 **API Endpoint:** `GET /api/trigger-job`
 
-#### 2.1 任务触发与认证
+#### 3.1 核心处理流程
 
-*   **触发方式**：该 API 端点预期由一个外部的定时任务服务（Cron Job）通过发送 `GET` 请求来触发。
-*   **安全认证**：为了防止未经授权的访问，任务在执行前会验证请求头中的 `authorization` 字段。该字段的值必须是 `Bearer ${CRON_SECRET}`，其中 `CRON_SECRET` 是一个存储在环境变量中的密钥。如果认证失败，将返回 `401 Unauthorized` 错误。
-
-#### 2.2 核心处理流程
-
-任务一旦被成功触发，将执行以下一系列操作：
-
-1.  **启动日志记录**: 为本次任务创建一个唯一的 `runId`，后续所有日志都将与此 ID关联，便于追踪和调试。
-2.  **获取待处理账户**: 从 Supabase 数据库的 `accounts_duplicate` 表中，查询所有 `scheduling_rule->>enabled` 字段为 `true` 的账户。这意味着任务只会处理已启用“上架计划”的账户。
-3.  **遍历并处理每个账户**: 系统会依次处理每个符合条件的账户。为了防止并发执行导致的数据冲突，任务会为每个账户设置一个“锁”（通过在 `automation_runs` 表中插入一条记录）。如果“锁”已存在，则跳过该账户，并记录一条警告日志。
-4.  **“库存”检查 (Keep One in Stock)**:
-    *   在处理一个账户前，系统会优先检查其“待上架”队列 (`待上架` 字段)。
-    *   **核心规则**: 如果队列中已存在任何**真实商品**（非占位符），则立即停止处理当前账户。这是为了确保队列中始终只有一个真实商品待处理，避免积压。
-5.  **寻找并填充“占位符”**:
-    *   如果队列中没有真实商品，任务会寻找第一个“占位符” (`isPlaceholder: true`)。占位符是在前端设置上架规则时自动生成的，代表一个未来的上架时间点。
-    *   如果找不到占位符，说明当天的上架额度已满或未设置，任务将跳过该账户。
-6.  **选择新商品**:
-    *   找到占位符后，任务会从 `search_results_duplicate_本人` 表中，为该账户选择一个**从未被使用过**的新商品。
-    *   “使用过”的商品 ID 会从所有账户的“待上架”和“已上架”队列中收集，确保不会重复上架。
-7.  **AI 内容生成与处理**:
-    *   **文案生成**: 使用与账户关联的 "文案生成prompt" 和新选出商品的原有文本，通过调用 Gemini API (`gemini-1.5-flash`) 生成新的、经过优化的商品文案。
-    *   **图片生成**: 使用新生成的文案，调用 `generateImageBufferFromText` 和 `uploadImageToSupabase` 函数，生成一张新的商品图片并上传至 Supabase Storage。
-8.  **更新数据库**:
-    *   **更新商品信息**: 将 AI 生成的新文案和图片 URL 更新回 `search_results_duplicate_本人` 表中对应的商品记录。
-    *   **替换占位符**: 在账户的“待上架”队列中，用这个包含了新商品 ID 和**原占位符预定时间**的真实商品对象，替换掉之前的占位符。**这一点至关重要，它保证了商品会按照最初规划的时间上架。**
-9.  **释放锁并记录日志**:
-    *   处理完一个账户后，会从 `automation_runs` 表中删除对应的记录，即“释放锁”。
-    *   整个流程中的关键步骤都会被详细记录到 `automation_logs` 表中，包括成功、警告和错误信息。
-10. **任务结束**: 所有账户处理完毕后，记录一条最终的成功日志，并返回 `200 OK` 响应。
+1.  **获取激活的账户**: 同旧版，获取所有 `scheduling_rule->>enabled: true` 的账户。
+2.  **锁定与遍历**: 同旧版，使用 `automation_runs` 表作为锁，依次处理账户。
+3.  **寻找待办任务**:
+    *   它会扫描账户的 `待上架` 队列，寻找第一个**时间已到或已过期** (`scheduled_at <= now`) 的任务。
+    *   **关键条件**: 如果这个任务是**真实商品**（`isPlaceholder: false`），则将其作为本次要处理的目标。
+    *   如果时间到了，但最前端的任务依然是个占位符，后端任务**不会**做任何事，直接跳过，等待用户从前端去填充它。
+4.  **AI处理与上架**:
+    *   一旦找到待办的真实商品，后端会执行完整的AI文案生成、AI图片生成、上传图片等一系列操作。
+5.  **更新数据库**:
+    *   **更新商品**: 将AI生成的内容更新回 `search_results_duplicate_本人` 表。
+    *   **更新队列**: 从 `待上架` 队列中移除这个已被处理的商品，并将其信息添加到 `已上架json` 队列中。**注意：后端的 `trigger-job` 不负责补充新占位符，这个工作由前端的“传送带”`useEffect` hook完成。**
+6.  **释放锁与记录日志**: 同旧版。
 
 ---
-### 3. 前端交互与配置 (`page.tsx` & `AccountListView.tsx`)
 
-前端的核心是“萝卜坑”式的占位符模型，它确保了上架节奏的稳定性和可预见性。
-
-#### 3.1 规则设置与重置
-
-*   **设置规则 (`handleSaveRule`)**: 用户在“高级设置”中定义“每日上架数量”。保存后，系统会清空现有队列，并从当前时间开始，根据数量和24小时间隔，生成一整套全新的、带准确时间戳的“待定商品”占位符。
-*   **重置排期 (`handleResetSchedule`)**: 用户可以随时点击“重置排期”按钮，该操作会清空当前所有排期（包括真实商品），并重新执行一遍“设置规则”的逻辑，生成一套全新的占位符队列。
-
-#### 3.2 上架：填充空位 (`handleDeployProduct`)
-
-当用户从商品列表页投放一个商品时，系统会执行“填充空位”逻辑：
-1.  **扫描队列**: 系统会从头到尾扫描该账户的“待上架”队列。
-2.  **寻找空位**: 寻找第一个 `isPlaceholder: true` 的“待定商品”空位。
-3.  **填充**: 将用户选择的真实商品放入该空位，并**完全继承该空位原有的 `scheduled_at` 时间戳**。
-4.  **队列已满**: 如果扫描完成都找不到任何空位，则会提示用户“排期已满”。
-
-#### 3.3 删除：留坑或滚动 (`handleDeleteItemFromArray`)
-
-删除操作根据删除对象的类型，有两种不同行为：
-1.  **删除真实商品（留坑）**: 如果用户删除的是一个已排期的真实商品，该商品所在的“坑”**不会被移除**。它会自动变回一个“待定商品”占位符，但**保留原有的时间戳**，等待新的商品来填充。
-2.  **删除占位符（滚动）**: 只有当用户删除一个“待定商品”占位符时，队列才会“滚动”。系统会移除这个占位符，并立即在队列的**末尾补充一个新的占位符**，其时间戳会根据队尾最后一个任务的时间和上架间隔计算得出，确保队列总长度不变。
-
-### 4. 数据流与时序图 (最终版)
+## 4. 数据流与时序图 (最终版)
 
 ```mermaid
 sequenceDiagram
     participant User as 用户
-    participant Frontend as 前端界面
+    participant Frontend as 前端 (React State)
+    participant ConveyorBelt as "传送带 (useEffect)"
+    participant Supabase as Supabase DB
+    participant Cron as Cron Job
+    participant Backend as 后端 (trigger-job)
+
+    User->>Frontend: 1. 设置规则 (2件/天)
+    Frontend->>Frontend: 2. (纯前端) 生成 [P1, P2]
+    Note right of Frontend: 此时DB未变
+
+    User->>Frontend: 3. 上架商品A
+    Frontend->>Supabase: 4. 更新队列为 [A(12:00), P2(24:00)]
+
+    loop 每分钟
+        ConveyorBelt->>Supabase: 5. 检查排期
+        Note over ConveyorBelt, Supabase: 发现 P-expired 已过期
+        ConveyorBelt->>Supabase: 6. 更新队列为 [A(t1), P-new(t2)]
+    end
+
+    Cron->>Backend: 7. 定时触发任务
+    Backend->>Supabase: 8. 寻找 <= now 的真实商品
+    Note over Backend, Supabase: 发现 A (t1)
+    Backend->>Backend: 9. AI处理商品A
+    Backend->>Supabase: 10. 将A移至“已上架”
+``` 
+```
+
+---
+
+## 5. 关键代码逻辑修改
+
+为实现上述流程，对前端代码进行了以下关键修改：
+
+*   **`useEffect` (传送带滚动)**:
+    *   修改了过滤逻辑，现在只移除 `isPlaceholder: true` 且时间已过的任务。
+    *   这可以防止前端意外删除一个后端尚未处理的、已到期的真实商品。
+
+*   **`handleSaveRule` & `handleResetSchedule` (规则保存与重置)**:
+    *   **增加用户警告**: 在执行前，会检查当前排期中是否存在真实商品。如果存在，会弹窗警告用户此操作将清空现有排期。
+    *   **同步数据库**: 这两个操作现在会将新生成的“空托盘”队列**直接写入数据库**的 `待上架` 字段。这确保了前端UI与数据库状态的绝对一致，避免了刷新页面后数据不一致的问题。
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant Frontend as 前端 (React State)
+    participant ConveyorBelt as "传送带 (useEffect)"
+    participant Supabase as Supabase DB
+    participant Cron as Cron Job
+    participant Backend as 后端 (trigger-job)
+
+    User->>Frontend: 1. 设置规则 (2件/天)
+    Frontend->>Frontend: 2. (纯前端) 生成 [P1, P2]
+    Note right of Frontend: 此时DB未变
+
+    User->>Frontend: 3. 上架商品A
+    Frontend->>Supabase: 4. 更新队列为 [A(12:00), P2(24:00)]
+
+    loop 每分钟
+        ConveyorBelt->>Supabase: 5. 检查排期
+        Note over ConveyorBelt, Supabase: 发现 P-expired 已过期
+        ConveyorBelt->>Supabase: 6. 更新队列为 [A(t1), P-new(t2)]
+    end
+
+    Cron->>Backend: 7. 定时触发任务
+    Backend->>Supabase: 8. 寻找 <= now 的真实商品
+    Note over Backend, Supabase: 发现 A (t1)
+    Backend->>Backend: 9. AI处理商品A
+    Backend->>Supabase: 10. 将A移至“已上架”
+```
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant Frontend as 前端 (React)
     participant Supabase as Supabase DB
 
-    User->>Frontend: 1. 设置规则: 2件/天
-    Frontend->>Frontend: 2. 生成占位符 P1(12:00), P2(24:00)
-    Frontend->>Supabase: 3. 保存队列 [P1, P2]
-
-    User->>Frontend: 4. 上架商品A
-    Frontend->>Frontend: 5. 找到第一个空位 P1
-    Frontend->>Supabase: 6. 更新队列为 [A(12:00), P2(24:00)]
-
-    User->>Frontend: 7. 删除商品A
-    Frontend->>Frontend: 8. 将A变回占位符 P_A
-    Frontend->>Supabase: 9. 更新队列为 [P_A(12:00), P2(24:00)]
-
-    User->>Frontend: 10. 删除占位符 P2
-    Frontend->>Frontend: 11. 移除P2, 在队尾补充新占位符P3
-    Frontend->>Supabase: 12. 更新队列为 [P_A(12:00), P3(36:00)]
-``` 
+    User->>Frontend: 1. 点击“保存规则”
+    Frontend->>Frontend: 2. 检查排期中是否有真实商品
+    alt 排期中有真实商品
+        Frontend->>User: 3. 弹窗警告“将清空现有排期”
+        User->>Frontend: 4. 确认
+    end
+    Frontend->>Frontend: 5. 生成新的占位符队列
+    Frontend->>Supabase: 6. 将“规则”和“新队列”写入数据库
+    Supabase-->>Frontend: 7. 确认成功
+    Frontend->>User: 8. UI更新，显示全新排期
+```
+```

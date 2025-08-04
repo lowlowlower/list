@@ -140,8 +140,6 @@ export default function AccountsPage() {
     const [passwordInput, setPasswordInput] = useState<string>('');
     const [authError, setAuthError] = useState<string | null>(null);
 
-    const [now, setNow] = useState(() => new Date());
-
     // State for accounts
     const [allAccounts, setAllAccounts] = useState<Account[]>([]); 
     const [loadingAccounts, setLoadingAccounts] = useState<boolean>(true);
@@ -158,7 +156,7 @@ export default function AccountsPage() {
     const [isAiAddingAccounts, setIsAiAddingAccounts] = useState<boolean>(false);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null); // State for the account settings modal
     const [editingSchedule, setEditingSchedule] = useState<{ accountName: string; id: string; newTime: string } | null>(null);
-    const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
+    const [isAiAnalysisModalOpen, setIsAiAnalysisModalOpen] = useState(false);
     const [analysisResult, setAnalysisResult] = useState('');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [analysisCount, ] = useState<number>(10);
@@ -175,13 +173,6 @@ export default function AccountsPage() {
     const [editingXianyu, setEditingXianyu] = useState<{ [key: string]: string }>({});
     const [editingPhone, setEditingPhone] = useState<{ [key:string]: string }>({});
     const [loadingStates, setLoadingStates] = useState<{ [key: string]: { ai: boolean; saveKeywords: boolean; saveKwPrompt: boolean; saveBizPrompt: boolean; saveCopyPrompt: boolean; saveRule: boolean; } }>({}); // Add saveRule
-    const [editingRules, setEditingRules] = useState<{ [key: string]: { items_per_day: number | '' } }>({});
-    // const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set()); // This is now replaced by the modal
-    // const [schedules, setSchedules] = useState<{ [accountName: string]: {
-    //     itemsPerDay: number;
-    //     generatedSchedule: ScheduledProduct[] | null;
-    // } }>({}); // Removed as it's no longer used
-
 
     // State for products of a selected account
     const [selectedAccountForProducts, setSelectedAccountForProducts] = useState<Account | null>(null);
@@ -211,83 +202,6 @@ export default function AccountsPage() {
         setAccounts(allAccounts);
     }, [allAccounts]);
 
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setNow(new Date());
-        }, 30 * 1000); // Update every 30 seconds
-        return () => clearInterval(interval);
-    }, []);
-
-    useEffect(() => {
-        const scheduleRoller = setInterval(() => {
-            setAllAccounts(currentAccounts => {
-                let hasChanged = false;
-                const updatedAccounts = currentAccounts.map(account => {
-                    const rule = account.scheduling_rule;
-                    if (!rule || !rule.enabled || !account.todays_schedule || account.todays_schedule.length === 0) {
-                        return account;
-                    }
-
-                    const now = new Date().getTime();
-                    let todays_schedule = [...account.todays_schedule];
-                    
-                    const outdatedCount = todays_schedule.filter(item => new Date(item.scheduled_at).getTime() < now).length;
-
-                    if (outdatedCount > 0) {
-                        hasChanged = true;
-                        
-                        // Filter out outdated items
-                        todays_schedule = todays_schedule.filter(item => new Date(item.scheduled_at).getTime() >= now);
-
-                        // Find the last scheduled time to calculate the next one
-                        const lastSchedule = todays_schedule[todays_schedule.length - 1];
-                        let lastScheduleTime = lastSchedule ? new Date(lastSchedule.scheduled_at).getTime() : now;
-
-                        const intervalMillis = (24 * 60 * 60 * 1000) / rule.items_per_day;
-
-                        // Add new placeholders to maintain the total count
-                        for (let i = 0; i < outdatedCount; i++) {
-                            lastScheduleTime += intervalMillis;
-                            const newPlaceholder: ScheduledProduct = {
-                                id: `待定商品 ${new Date().getTime() + i}`, // Unique ID
-                                scheduled_at: new Date(lastScheduleTime).toISOString(),
-                                isPlaceholder: true,
-                            };
-                            todays_schedule.push(newPlaceholder);
-                        }
-                        
-                        // Return a new object for the account to trigger re-render
-                        return { ...account, todays_schedule };
-                    }
-                    
-                    return account;
-                });
-
-                if (hasChanged) {
-                    // If any account's schedule was updated, save all changes to the database
-                    const accountsToUpdate = updatedAccounts.filter((acc, index) => JSON.stringify(acc.todays_schedule) !== JSON.stringify(currentAccounts[index].todays_schedule));
-                    
-                    accountsToUpdate.forEach(acc => {
-                        const updatedData = {
-                            '待上架': acc.todays_schedule
-                        };
-                        supabase.from('accounts').update(updatedData).eq('name', acc.name).then(({ error }) => {
-                            if (error) {
-                                console.error(`Failed to roll schedule for ${acc.name}:`, error);
-                            }
-                        });
-                    });
-
-                    return updatedAccounts;
-                }
-
-                return currentAccounts;
-            });
-        }, 60000); // Check every 60 seconds
-
-        return () => clearInterval(scheduleRoller);
-    }, [supabase]);
-
     const handlePasswordSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         // Simple password check, replace with a more secure method for production
@@ -311,7 +225,7 @@ export default function AccountsPage() {
             const [accountsPromise, keywordsPromise, productsPromise] = await Promise.all([
                  supabase
                     .from('accounts_duplicate')
-                    .select('name, created_at, updated_at, "待上架", "已上架json", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule", "xhs_头像", "display_order"')
+                    .select('name, created_at, updated_at, "待上架", "已上架json", "关键词prompt", "业务描述", "文案生成prompt", "xhs_account", "闲鱼账号", "手机型号", "scheduling_rule", "xhs_头像", "display_order", "schedule_template"')
                     .order('display_order', { ascending: true })
                     .order('name', { ascending: true }),
                  supabase.from('important_keywords_本人').select('id, account_name, keyword'),
@@ -356,31 +270,54 @@ export default function AccountsPage() {
                 const defaultCopywritingPrompt = `修改文案，请保留关键词！不要谄媚，不要口水话，直入关键点，使其，更简洁、突出关键词，去掉敏感词汇。 不能出现脏话。敏感词。1.不能出现下面词汇：指dao答yi、答疑、中介勿扰、账号、基本没怎么用过、标价出！可以直接拍下！、电子资料售出不退不换！、不退换、拍下秒发、使用痕迹等相似词汇。                                                            2.重复检查一轮，以空格或标点为边界，删掉同时带有"退""换"两字的句子 3.删掉中文或者英文国家地名比如澳洲AU，英国UK,香港HK等等。4. 如果既有词汇 题目，又有词汇 答案 （形式如 "题目 & 答案""题目和答案"等），用"Q&A"代替 5.敏感词汇如 答案用answer替换。6.删掉最新，最好等等字体。7.删掉价格。8.排列一下文案更美观。9. 不要markdown格式符号。10.不能出现"商品信息"、"关键词"等字体。11.递归检查，不要出现"*"这个符号。12.拼写检查，删除汉字专有名词内的空格，删除英文单字内的空格。13.为文案生成 #+关键词，要求围绕业务和文案弄8个左右。14.要围绕原始文案关键词改写 不能把他的关键业务删除。15.结尾添加欢迎私信咨询，`;
                 const joinedKeywords = (keywordsMap.get(acc.name) || []).join('\n');
                 
-                // --- Data Reconciliation ---
-                // Allow products to be re-scheduled even if already in '已上架'
-                const rawPendingProducts = (acc as Account)['待上架'] || [];
-                const cleanPendingProducts = Array.isArray(rawPendingProducts) 
-                    ? rawPendingProducts.filter(p => p !== null && p !== undefined)
-                    : [];
+                // --- NEW V3 DYNAMIC SCHEDULE LOGIC ---
+                const realProducts = ((acc['待上架'] || []) as ScheduledProduct[]).filter(item => item && !item.isPlaceholder);
+                const scheduleTemplate = acc.schedule_template || ['09:00', '12:00', '15:00', '18:00', '21:00'];
+
+                const placeholders: ScheduledProduct[] = [];
+                const now = new Date();
                 
-                // --- FINAL, SIMPLIFIED, AND CORRECT SCHEDULING LOGIC ---
-                // The "todays_schedule" is now simply the raw, sorted pending queue from the database.
-                // All complex client-side generation is removed to make the UI a direct reflection of the database state.
-                const todays_schedule: ScheduledProduct[] = (cleanPendingProducts as ScheduledProduct[])
-                    .filter(item => typeof item === 'object' && item.scheduled_at)
-                    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-                // --- END OF NEW LOGIC ---
+                // Generate placeholders for today and the next few days to ensure the queue is always full
+                for (let dayOffset = 0; dayOffset < 3; dayOffset++) { // Generate for today and next 2 days
+                    for (const time of scheduleTemplate) {
+                        const [hour, minute] = time.split(':').map(Number);
+                        const scheduleDate = new Date();
+                        scheduleDate.setDate(now.getDate() + dayOffset);
+                        scheduleDate.setHours(hour, minute, 0, 0);
+
+                        // If the time is in the past for today, skip it
+                        if (dayOffset === 0 && scheduleDate.getTime() < now.getTime()) {
+                            continue;
+                        }
+
+                        // Check if a real product already occupies this exact slot
+                        const isOccupied = realProducts.some(p => new Date(p.scheduled_at).getTime() === scheduleDate.getTime());
+
+                        if (!isOccupied) {
+                            placeholders.push({
+                                id: `placeholder-${crypto.randomUUID()}`,
+                                scheduled_at: scheduleDate.toISOString(),
+                            isPlaceholder: true,
+                        });
+                    }
+                    }
+                }
+
+                const todays_schedule = [...realProducts, ...placeholders]
+                        .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+
 
                 return {
                     ...acc,
-                    '待上架': cleanPendingProducts, // Use the reconciled list
-                    '已上架': acc['已上架json'], // Use the new JSON field for the "已上架" display
+                    '待上架': realProducts, // DB state only has real products
+                    '已上架': acc['已上架json'],
                     keywords: joinedKeywords,
                     '关键词prompt': acc['关键词prompt'] || defaultKeywordPrompt,
                     '业务描述': acc['业务描述'] || defaultBusinessPrompt,
-                    '文案生成prompt': acc['文案生成prompt'] || defaultCopywritingPrompt, // Set default
-                    todays_schedule: todays_schedule, // Attach today's schedule
-                    today_new_products: newProductsCountMap.get(acc.name) || 0, // Add the new count
+                    '文案生成prompt': acc['文案生成prompt'] || defaultCopywritingPrompt,
+                    todays_schedule: todays_schedule, // This is the dynamic schedule for the UI
+                    today_new_products: newProductsCountMap.get(acc.name) || 0,
+                    schedule_template: scheduleTemplate,
                 };
             });
 
@@ -391,17 +328,15 @@ export default function AccountsPage() {
             const initialXhs: { [key: string]: string } = {};
             const initialXianyu: { [key: string]: string } = {};
             const initialPhone: { [key: string]: string } = {};
-            const initialRules: { [key: string]: { items_per_day: number | '' } } = {};
 
             mergedAccounts.forEach(acc => {
                 initialEditingKeywords[acc.name] = acc.keywords || '';
                 initialKeywordPrompts[acc.name] = acc['关键词prompt']!;
                 initialBusinessPrompts[acc.name] = acc['业务描述']!;
-                initialCopywritingPrompts[acc.name] = acc['文案生成prompt']!; // Initialize state
+                initialCopywritingPrompts[acc.name] = acc['文案生成prompt']!;
                 initialXhs[acc.name] = acc.xhs_account || '';
                 initialXianyu[acc.name] = acc['闲鱼账号'] || '';
                 initialPhone[acc.name] = acc['手机型号'] || '';
-                initialRules[acc.name] = { items_per_day: (acc as Account).scheduling_rule?.items_per_day || '' };
             });
             
             setAllAccounts(mergedAccounts as Account[]);
@@ -413,7 +348,6 @@ export default function AccountsPage() {
             setEditingXhs(initialXhs);
             setEditingXianyu(initialXianyu);
             setEditingPhone(initialPhone);
-            setEditingRules(initialRules);
 
         } catch (err: unknown) {
             setErrorAccounts(`加载账号列表失败: ${getErrorMessage(err)}`);
@@ -463,9 +397,6 @@ export default function AccountsPage() {
         }
     }, []);
 
-    // No longer needed
-    // const fetchGlobalPrompt = useCallback(async () => { ... });
-
     const fetchProductSchedules = useCallback(async () => {
         try {
             const {  error } = await supabase
@@ -477,22 +408,14 @@ export default function AccountsPage() {
         }
     }, []);
 
-    // --- Initial Data Load (run only after authentication) ---
     useEffect(() => {
         if (isAuthenticated) {
             fetchAccounts();
-            // fetchGlobalPrompt(); // Removed
             fetchProductSchedules();
         }
     }, [isAuthenticated, fetchAccounts, fetchProductSchedules]);
 
-
-    
-
-
-    // --- Account Management ---
     const handleAddAccount = async () => {
-        // ... (implementation is the same as before)
         const trimmedName = newAccountName.trim();
         if (!trimmedName) {
             alert("请输入要添加的账号名称。");
@@ -514,7 +437,7 @@ export default function AccountsPage() {
                     name: trimmedName,
                     '关键词prompt': defaultKeywordPrompt,
                     '业务描述': defaultBusinessPrompt,
-                    '文案生成prompt': defaultCopywritingPrompt, // Add new prompt on creation
+                    '文案生成prompt': defaultCopywritingPrompt,
                     'xhs_account': newXhsAccount.trim() || null,
                     '闲鱼账号': newXianyuAccount.trim() || null,
                     '手机型号': newPhoneModel.trim() || null,
@@ -522,8 +445,8 @@ export default function AccountsPage() {
             if (error) throw error;
             alert(`账号 "${trimmedName}" 添加成功！`);
             fetchAccounts(); 
-            setIsAddAccountModalOpen(false); // Close modal on success
-            setNewAccountName(''); // Reset input
+            setIsAddAccountModalOpen(false);
+            setNewAccountName('');
             setNewXhsAccount('');
             setNewXianyuAccount('');
             setNewPhoneModel('');
@@ -535,7 +458,6 @@ export default function AccountsPage() {
     };
 
     const handleDeleteAccount = async (accountNameToDelete: string) => {
-        // ... (implementation is the same as before)
         if (!confirm(`确定要删除账号 "${accountNameToDelete}"？`)) return;
 
         setDeletingAccount(accountNameToDelete);
@@ -647,16 +569,14 @@ export default function AccountsPage() {
     };
 
     const handleSaveAccountField = async (accountName: string, field: '关键词prompt' | '业务描述' | '文案生成prompt' | 'xhs_account' | '闲鱼账号' | '手机型号', value: string) => {
-        let stateKey: 'saveKwPrompt' | 'saveBizPrompt' | 'saveCopyPrompt' | 'saveXhs' | 'saveXianyu' | 'savePhone' = 'saveBizPrompt'; // Default, needs to be mapped
+        let stateKey: 'saveKwPrompt' | 'saveBizPrompt' | 'saveCopyPrompt' | 'saveXhs' | 'saveXianyu' | 'savePhone' = 'saveBizPrompt';
         switch(field) {
             case '关键词prompt': stateKey = 'saveKwPrompt'; break;
             case '业务描述': stateKey = 'saveBizPrompt'; break;
             case '文案生成prompt': stateKey = 'saveCopyPrompt'; break;
-            // Simplified for assets, can be expanded if needed
             case 'xhs_account': 
             case '闲鱼账号':
             case '手机型号':
-                // For now, no specific loading state for these, but can be added
                 break;
         }
 
@@ -686,7 +606,6 @@ export default function AccountsPage() {
  
 
     const handleDeleteItemFromArray = async (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, itemToDelete: string) => {
-        // Ensure we only process valid array keys
         const validArrayKeys: (keyof Pick<Account, '待上架' | '已上架'>)[] = ['待上架', '已上架'];
         if (!validArrayKeys.includes(arrayKey)) {
             console.error("Invalid key passed to handleDeleteItemFromArray:", arrayKey);
@@ -699,12 +618,10 @@ export default function AccountsPage() {
         const originalAccount = allAccounts.find(acc => acc.name === accountName);
         if (!originalAccount) return;
 
-        // Determine which database field to update based on the arrayKey
         const dbFieldToUpdate = arrayKey === '已上架' ? '已上架json' : '待上架';
 
         const originalArray = (originalAccount[arrayKey] as (string | ScheduledProduct)[] | null) || [];
         
-        // --- NEW DELETION LOGIC ---
         let newArray;
         const itemIndex = originalArray.findIndex(item => (typeof item === 'object' ? item.id : item) === itemToDelete);
         
@@ -715,17 +632,15 @@ export default function AccountsPage() {
 
         const itemObject = originalArray[itemIndex];
 
-        // Case 1: Deleting a REAL PRODUCT - replace it with a placeholder
         if (typeof itemObject === 'object' && !itemObject.isPlaceholder) {
             const newPlaceholder: ScheduledProduct = {
-                id: `待定商品 (来自 ${itemObject.id})`, // Make the ID unique and informative
+                id: `待定商品 (来自 ${itemObject.id})`,
                 scheduled_at: itemObject.scheduled_at,
                 isPlaceholder: true,
             };
             newArray = [...originalArray];
             newArray[itemIndex] = newPlaceholder;
         } 
-        // Case 2: Deleting a PLACEHOLDER - remove and add a new one at the end
         else {
             newArray = originalArray.filter(item => (typeof item === 'object' ? item.id : item) !== itemToDelete);
 
@@ -744,20 +659,9 @@ export default function AccountsPage() {
                     }
                 }
                 
-                let placeholderCounter = 1;
-                const existingPlaceholders = newArray.filter(item => (item as ScheduledProduct).isPlaceholder);
-                if (existingPlaceholders.length > 0) {
-                    const placeholderNumbers = existingPlaceholders
-                        .map(item => parseInt(String((item as ScheduledProduct).id).replace(/\D/g, ''), 10))
-                        .filter(num => !isNaN(num));
-                    if (placeholderNumbers.length > 0) {
-                        placeholderCounter = Math.max(...placeholderNumbers) + 1;
-                    }
-                }
-                
                 const nextScheduleTime = lastScheduleTime + intervalMillis;
                 newArray.push({
-                    id: `待定商品 ${placeholderCounter}`,
+                    id: `placeholder-${crypto.randomUUID()}`,
                     scheduled_at: new Date(nextScheduleTime).toISOString(),
                     isPlaceholder: true,
                 });
@@ -776,7 +680,6 @@ export default function AccountsPage() {
                 return; 
             }
             
-            // --- Robust Optimistic UI Update ---
             setAllAccounts(prevAccounts => 
                 prevAccounts.map(acc => {
                     if (acc.name === accountName) {
@@ -835,7 +738,6 @@ export default function AccountsPage() {
 
             if (error) throw error;
 
-            // Optimistically remove from UI
             setKeywordsForEditing(currentKeywords => currentKeywords.filter(kw => kw.id !== id));
         } catch (e: unknown) {
              alert(`删除关键词失败: ${getErrorMessage(e)}`);
@@ -856,7 +758,6 @@ export default function AccountsPage() {
                 
                 if (error) throw error;
 
-                // Add to UI
                 setKeywordsForEditing(current => [...current, data]);
 
             } catch(e: unknown) {
@@ -932,7 +833,7 @@ export default function AccountsPage() {
             if (insertError) throw insertError;
 
             alert(`成功添加了 ${newUniqueKeywords.length} 个新的AI生成关键词！`);
-            await fetchKeywordsForAccount(selectedAccountForKeywords.name); // Refresh the list
+            await fetchKeywordsForAccount(selectedAccountForKeywords.name);
 
         } catch (e) {
             alert(`AI生成关键词失败: ${getErrorMessage(e)}`);
@@ -1109,14 +1010,15 @@ export default function AccountsPage() {
 
         const placeholderToReplace = currentPending[placeholderIndex];
 
+        // The new item inherits the placeholder's time but is now a real product.
                 const newScheduledItem: ScheduledProduct = {
                     id: productId,
             scheduled_at: placeholderToReplace.scheduled_at, // Inherit the placeholder's time
             isPlaceholder: false,
         };
 
-        const newPendingList = [...currentPending];
-        newPendingList[placeholderIndex] = newScheduledItem;
+        // Add the new real product to the existing real products in the state
+        const newPendingList = [...(account['待上架'] || []), newScheduledItem];
 
         try {
             const { error } = await supabase
@@ -1128,17 +1030,10 @@ export default function AccountsPage() {
 
             alert(`产品 ${productId} 已成功排期在 ${new Date(newScheduledItem.scheduled_at).toLocaleString()}。`);
             
-            // Optimistic UI update
-            setAllAccounts(prev => prev.map(acc => {
-                if (acc.name === account.name) {
-                    const updatedAccount = { ...acc, '待上架': newPendingList };
-                    const todays_schedule = newPendingList
-                        .filter(item => typeof item === 'object' && item.scheduled_at)
-                        .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-                    return { ...updatedAccount, todays_schedule };
-                }
-                return acc;
-            }));
+            // Refetch all data to ensure the UI is perfectly in sync with the new dynamic logic
+            await fetchAccounts();
+
+            // Also update the local product list to mark it as pending
             setProducts(prevProducts => 
                 prevProducts.map(p => 
                     p.id === productId ? { ...p, isPending: true } : p
@@ -1182,103 +1077,61 @@ export default function AccountsPage() {
     };
 
 
-    const handleSaveRule = async (accountName: string) => {
+    const handleSaveRule = async (accountName: string, scheduleTemplate: string[]) => {
         setIsSubmitting(true);
         try {
-            const items_per_day = editingRules[accountName]?.items_per_day || 0;
-            const newPendingQueue: ScheduledProduct[] = [];
-            
-            if (items_per_day > 0) {
-                const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
-                const startTime = new Date().getTime() + 10 * 60 * 1000;
-                
-                for (let i = 0; i < items_per_day; i++) {
-                    const nextScheduleTime = startTime + intervalMillis * i;
-                    newPendingQueue.push({
-                        id: `待定商品 ${i + 1}`,
-                        scheduled_at: new Date(nextScheduleTime).toISOString(),
-                        isPlaceholder: true,
-                    });
-                }
-            }
-            
-            const updatedFrontendData = {
-                scheduling_rule: { enabled: true, items_per_day },
-                '待上架': newPendingQueue,
-                todays_schedule: newPendingQueue,
-            };
-    
-            const updater = (prev: Account[]) => prev.map(acc => 
-                acc.name === accountName
-                    ? { ...acc, ...updatedFrontendData }
-                    : acc
-            );
+            const cleanTemplate = scheduleTemplate.filter(t => t && /^\d{2}:\d{2}$/.test(t)).sort();
 
-            // Update both states
-            setAccounts(updater);
-            setAllAccounts(updater);
+            const { error } = await supabase
+                .from('accounts_duplicate')
+                .update({ schedule_template: cleanTemplate, updated_at: new Date().toISOString() })
+                .eq('name', accountName);
+
+            if (error) throw error;
             
-            // Also update the database rule, but not the schedule
-            supabase.from('accounts_duplicate').update({
-                scheduling_rule: updatedFrontendData.scheduling_rule
-            }).eq('name', accountName).then(({error}) => {
-                if(error) console.error("Failed to save rule to DB", error);
-            });
+            alert('每日时刻表已保存！');
+            
+            await fetchAccounts();
 
         } catch (error) {
-            console.error('Failed to update rule on frontend:', error);
-            alert(`更新规则失败: ${getErrorMessage(error)}`);
+            console.error('Failed to save schedule template:', error);
+            alert(`保存时刻表失败: ${getErrorMessage(error)}`);
         } finally {
             setIsSubmitting(false);
+            setEditingAccount(null);
         }
     };
 
     const handleResetSchedule = async (accountName: string) => {
         setIsSubmitting(true);
-        try {
-            const account = allAccounts.find(a => a.name === accountName);
-            if (!account || !account.scheduling_rule) {
-                alert('未找到该账号或其排期规则');
+        const confirmed = window.confirm(
+            '此操作将清空当前所有已排期的真实商品，让所有位置都变成可用的空位。确定要继续吗？'
+        );
+        if (!confirmed) {
+            setIsSubmitting(false);
                 return;
             }
             
-            const { items_per_day } = account.scheduling_rule;
-            const newPendingQueue: ScheduledProduct[] = [];
-
-            if (items_per_day > 0) {
-                const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
-                const startTime = new Date().getTime() + 10 * 60 * 1000;
-                
-                for (let i = 0; i < items_per_day; i++) {
-                    const nextScheduleTime = startTime + intervalMillis * i;
-                    newPendingQueue.push({
-                        id: `待定商品 ${i + 1}`,
-                        scheduled_at: new Date(nextScheduleTime).toISOString(),
-                        isPlaceholder: true,
-                    });
-                }
-            }
-
-            const updatedFrontendData = {
-                '待上架': newPendingQueue,
-                todays_schedule: newPendingQueue,
-            };
-
-            const updater = (prev: Account[]) => prev.map(acc => 
-                acc.name === accountName
-                    ? { ...acc, ...updatedFrontendData }
-                    : acc
-            );
+        try {
+            // This action now simply clears the pending products list for the account.
+            const { error } = await supabase
+                .from('accounts_duplicate')
+                .update({ '待上架': [], updated_at: new Date().toISOString() })
+                .eq('name', accountName);
             
-            // Update both states
-            setAccounts(updater);
-            setAllAccounts(updater);
+            if (error) throw error;
+
+            alert('排期已成功重置！');
+            
+            // Refetch accounts to show the now-empty schedule
+            await fetchAccounts();
 
         } catch (error) {
-            console.error('Failed to reset schedule on frontend:', error);
+            console.error('Failed to reset schedule:', error);
             alert(`重置排期失败: ${getErrorMessage(error)}`);
         } finally {
             setIsSubmitting(false);
+            setEditingAccount(null); // Close modal on success
         }
     };
 
@@ -1668,8 +1521,8 @@ ${aiBatchInput}
                 onDeleteKeywordFromAccountLibrary={handleDeleteKeywordFromLibrary}
                 onManageAccountKeywords={handleAccountSelectForKeywords}
                 onSaveBusinessDescription={(accountName, newDescription) => handleSaveAccountField(accountName, '业务描述', newDescription)}
-                isAiAnalysisModalOpen={isAnalysisModalOpen}
-                setIsAiAnalysisModalOpen={setIsAnalysisModalOpen}
+                isAiAnalysisModalOpen={isAiAnalysisModalOpen}
+                setIsAiAnalysisModalOpen={setIsAiAnalysisModalOpen}
                 aiAnalysisInput={aiAnalysisInput}
                 setAiAnalysisInput={setAiAnalysisInput}
                 isAiAnalyzing={isAnalyzing}
@@ -1727,8 +1580,8 @@ ${aiBatchInput}
                     onSaveField={handleSaveAccountField}
                     onSaveKeywords={handleSaveKeywords}
                     onGenerateKeywords={handleGenerateKeywords}
-                    onSaveRule={() => handleSaveRule(editingAccount.name)} // Pass only the name
-                    onResetSchedule={() => handleResetSchedule(editingAccount.name)} // Pass only the name
+                    onSaveRule={() => handleSaveRule(editingAccount.name, editingAccount.schedule_template || [])}
+                    onResetSchedule={() => handleResetSchedule(editingAccount.name)}
                     onNavigateToKeywords={handleAccountSelectForKeywords}
                     editingCopywritingPrompts={editingCopywritingPrompts}
                     setEditingCopywritingPrompts={setEditingCopywritingPrompts}
@@ -1744,11 +1597,8 @@ ${aiBatchInput}
                     setEditingXianyu={setEditingXianyu}
                     editingPhone={editingPhone}
                     setEditingPhone={setEditingPhone}
-                    editingRules={editingRules}
-                    setEditingRules={setEditingRules}
                     loadingStates={loadingStates}
                     isSubmitting={isSubmitting} // Pass the new submitting state
-                    now={now}
                 />
             )}
         </>
