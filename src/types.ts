@@ -115,6 +115,7 @@ export type Account = {
   scheduling_rule?: { enabled?: boolean; items_per_day: number } | null;
   schedule_template?: string[] | null; // For precise daily scheduling
   todays_schedule?: ScheduledProduct[] | null;
+  tomorrows_schedule?: ScheduledProduct[] | null; // For the next day's schedule
   today_new_products?: number;
   isPending?: boolean;
 };
@@ -125,4 +126,4 @@ export type Deployment = {
     account_id: string;
     created_at: string;
     account_name: string;
-}; 
+};

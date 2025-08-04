@@ -295,32 +295,24 @@ export default function AccountsPage() {
                 const defaultCopywritingPrompt = `修改文案，请保留关键词！不要谄媚，不要口水话，直入关键点，使其，更简洁、突出关键词，去掉敏感词汇。 不能出现脏话。敏感词。1.不能出现下面词汇：指dao答yi、答疑、中介勿扰、账号、基本没怎么用过、标价出！可以直接拍下！、电子资料售出不退不换！、不退换、拍下秒发、使用痕迹等相似词汇。                                                            2.重复检查一轮，以空格或标点为边界，删掉同时带有"退""换"两字的句子 3.删掉中文或者英文国家地名比如澳洲AU，英国UK,香港HK等等。4. 如果既有词汇 题目，又有词汇 答案 （形式如 "题目 & 答案""题目和答案"等），用"Q&A"代替 5.敏感词汇如 答案用answer替换。6.删掉最新，最好等等字体。7.删掉价格。8.排列一下文案更美观。9. 不要markdown格式符号。10.不能出现"商品信息"、"关键词"等字体。11.递归检查，不要出现"*"这个符号。12.拼写检查，删除汉字专有名词内的空格，删除英文单字内的空格。13.为文案生成 #+关键词，要求围绕业务和文案弄8个左右。14.要围绕原始文案关键词改写 不能把他的关键业务删除。15.结尾添加欢迎私信咨询，`;
                 const joinedKeywords = (keywordsMap.get(acc.name) || []).join('\n');
                 
-                // --- NEW V3 DYNAMIC SCHEDULE LOGIC ---
                 const realProducts = ((acc['待上架'] || []) as ScheduledProduct[]).filter(item => item && !item.isPlaceholder);
                 const scheduleTemplate = acc.schedule_template || ['09:00', '12:00', '15:00', '18:00', '21:00'];
-
+                
                 const placeholders: ScheduledProduct[] = [];
                 const now = new Date();
-                
-                // --- V4 Schedule Logic: Today's Schedule (Now to Midnight) ---
-                const endOfDay = new Date();
-                endOfDay.setHours(23, 59, 59, 999);
-                
-                // Generate placeholders for today and tomorrow to ensure future slots are available for the planner.
-                for (let dayOffset = 0; dayOffset < 2; dayOffset++) { 
+
+                for (let dayOffset = 0; dayOffset < 2; dayOffset++) {
                     for (const time of scheduleTemplate) {
                         const [hour, minute] = time.split(':').map(Number);
                         const scheduleDate = new Date();
                         scheduleDate.setDate(now.getDate() + dayOffset);
                         scheduleDate.setHours(hour, minute, 0, 0);
 
-                        // If the time is in the past for today, skip it
                         if (dayOffset === 0 && scheduleDate.getTime() < now.getTime()) {
                             continue;
                         }
 
-                        // --- V5: Deterministic Randomization ---
-                        const dateString = scheduleDate.toISOString().split('T')[0]; // e.g., "2023-10-27"
+                        const dateString = scheduleDate.toISOString().split('T')[0];
                         const seedString = `${acc.name}-${dateString}-${time}`;
                         const seed = cyrb53(seedString);
                         const random = mulberry32(seed);
@@ -329,39 +321,53 @@ export default function AccountsPage() {
                         const thirtyMinutesInMillis = 30 * 60 * 1000;
                         const randomOffset = (random() * 2 - 1) * thirtyMinutesInMillis;
                         const randomizedTime = new Date(baseTime + randomOffset);
-                        // --- END ---
 
-                        // Check if a real product already occupies this exact slot (we can check a small window around the randomized time)
-                        const isOccupied = realProducts.some(p => Math.abs(new Date(p.scheduled_at).getTime() - randomizedTime.getTime()) < 60000 ); // 1 min proximity check
+                        const isOccupied = realProducts.some(p => Math.abs(new Date(p.scheduled_at).getTime() - randomizedTime.getTime()) < 60000);
 
                         if (!isOccupied) {
                             placeholders.push({
                                 id: `placeholder-${crypto.randomUUID()}`,
-                                scheduled_at: randomizedTime.toISOString(), // Use the randomized time for the placeholder UI
+                                scheduled_at: randomizedTime.toISOString(),
                                 isPlaceholder: true,
                             });
                         }
                     }
                 }
 
-                const todays_schedule = [...realProducts, ...placeholders]
-                    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
-                    .filter(item => {
-                        const itemTime = new Date(item.scheduled_at).getTime();
-                        // Only include items from now until midnight today.
-                        return itemTime >= now.getTime() && itemTime <= endOfDay.getTime();
-                    });
+                const allFutureItems = [...realProducts, ...placeholders]
+                    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+
+                const endOfToday = new Date();
+                endOfToday.setHours(23, 59, 59, 999);
+                
+                const startOfTomorrow = new Date(endOfToday);
+                startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+                startOfTomorrow.setHours(0, 0, 0, 0);
+
+                const endOfTomorrow = new Date(startOfTomorrow);
+                endOfTomorrow.setHours(23, 59, 59, 999);
+
+                const todays_schedule = allFutureItems.filter(item => {
+                    const itemTime = new Date(item.scheduled_at).getTime();
+                    return itemTime >= now.getTime() && itemTime <= endOfToday.getTime();
+                });
+                
+                const tomorrows_schedule = allFutureItems.filter(item => {
+                    const itemTime = new Date(item.scheduled_at).getTime();
+                    return itemTime >= startOfTomorrow.getTime() && itemTime <= endOfTomorrow.getTime();
+                });
 
 
                 return {
                     ...acc,
-                    '待上架': realProducts, // DB state only has real products
+                    '待上架': realProducts,
                     '已上架': acc['已上架json'],
                     keywords: joinedKeywords,
                     '关键词prompt': acc['关键词prompt'] || defaultKeywordPrompt,
                     '业务描述': acc['业务描述'] || defaultBusinessPrompt,
                     '文案生成prompt': acc['文案生成prompt'] || defaultCopywritingPrompt,
-                    todays_schedule: todays_schedule, // This is the dynamic schedule for the UI
+                    todays_schedule: todays_schedule,
+                    tomorrows_schedule: tomorrows_schedule,
                     today_new_products: newProductsCountMap.get(acc.name) || 0,
                     schedule_template: scheduleTemplate,
                 };
@@ -370,7 +376,7 @@ export default function AccountsPage() {
             const initialEditingKeywords: { [key: string]: string } = {};
             const initialKeywordPrompts: { [key: string]: string } = {};
             const initialBusinessPrompts: { [key: string]: string } = {};
-            const initialCopywritingPrompts: { [key: string]: string } = {}; // New state init
+            const initialCopywritingPrompts: { [key: string]: string } = {};
             const initialXhs: { [key: string]: string } = {};
             const initialXianyu: { [key: string]: string } = {};
             const initialPhone: { [key: string]: string } = {};
@@ -386,11 +392,11 @@ export default function AccountsPage() {
             });
             
             setAllAccounts(mergedAccounts as Account[]);
-            setAccounts(mergedAccounts as Account[]); // Also initialize the filtered list
+            setAccounts(mergedAccounts as Account[]);
             setEditingKeywords(initialEditingKeywords);
             setEditingKeywordPrompts(initialKeywordPrompts);
             setEditingBusinessPrompts(initialBusinessPrompts);
-            setEditingCopywritingPrompts(initialCopywritingPrompts); // Set new state
+            setEditingCopywritingPrompts(initialCopywritingPrompts);
             setEditingXhs(initialXhs);
             setEditingXianyu(initialXianyu);
             setEditingPhone(initialPhone);
@@ -965,7 +971,6 @@ export default function AccountsPage() {
                 const keywordsArray = keywordsText.split('\n').map(k => k.trim()).filter(Boolean);
 
                 if (keywordsArray.length > 0) {
-                    // 1. Save keywords to the product itself
                     const { error: updateError } = await supabase
                         .from('search_results_duplicate_本人')
                         .update({ 
@@ -975,10 +980,8 @@ export default function AccountsPage() {
                         .eq('id', productId);
                     if (updateError) throw updateError;
                     
-                    // 2. Add keywords to the account's list
                     await handleSaveKeywordsToAccount(account.name, keywordsArray);
 
-                    // 3. Update local state for immediate UI feedback
                     setProducts(prevProducts =>
                         prevProducts.map(p =>
                             p.id === productId
@@ -986,7 +989,7 @@ export default function AccountsPage() {
                                 : p
                         )
                     );
-                    fetchAccounts(); // Refresh to get latest account keyword count
+                    fetchAccounts();
                     console.log(`Successfully extracted and saved keywords for ${productId}`);
                 }
             } catch (e) {
@@ -995,27 +998,29 @@ export default function AccountsPage() {
         }
         // --- End of Automatic Keyword Extraction ---
 
+        // --- NEW DEPLOYMENT LOGIC: Find best available slot ---
+        const todaysPlaceholder = account.todays_schedule?.find(item => item.isPlaceholder);
+        const tomorrowsPlaceholder = account.tomorrows_schedule?.find(item => item.isPlaceholder);
 
-        // --- NEW DEPLOYMENT LOGIC: Find and fill the first available placeholder ---
-        const currentPending = (account['待上架'] || []) as ScheduledProduct[];
-        const placeholderIndex = currentPending.findIndex(item => item.isPlaceholder);
+        const placeholderToReplace = todaysPlaceholder || tomorrowsPlaceholder;
 
-        if (placeholderIndex === -1) {
-            alert('上架失败：此账号的排期已满，没有可用的待上架空位。请先删除一个已排期的商品或重置排期。');
+        if (!placeholderToReplace) {
+            alert('上架失败：今天和明天的排期均已满，没有可用的待上架空位。');
             return;
         }
 
-        const placeholderToReplace = currentPending[placeholderIndex];
-
-        // The new item inherits the placeholder's (already randomized) time.
         const newScheduledItem: ScheduledProduct = {
             id: productId,
             scheduled_at: placeholderToReplace.scheduled_at,
             isPlaceholder: false,
         };
 
-        // Add the new real product to the existing real products in the state
-        const newPendingList = [...(account['待上架'] || []), newScheduledItem];
+        const currentPendingList = (account['待上架'] || []).filter(item => {
+            const id = typeof item === 'object' && item !== null ? item.id : item;
+            return String(id) !== String(productId); // Remove if already exists
+        });
+
+        const newPendingList = [...currentPendingList, newScheduledItem];
 
         try {
             const { error } = await supabase
@@ -1025,18 +1030,16 @@ export default function AccountsPage() {
 
             if (error) throw error;
 
-            alert(`产品 ${productId} 已成功排期在 ${new Date(newScheduledItem.scheduled_at).toLocaleString()}。`);
+            const scheduleDay = todaysPlaceholder ? '今天' : '明天';
+            alert(`产品 ${productId} 已成功排期在 ${scheduleDay} ${new Date(newScheduledItem.scheduled_at).toLocaleTimeString()}。`);
             
-            // Refetch all data to ensure the UI is perfectly in sync with the new dynamic logic
             await fetchAccounts();
 
-            // Also update the local product list to mark it as pending
             setProducts(prevProducts => 
                 prevProducts.map(p => 
                     p.id === productId ? { ...p, isPending: true } : p
                 )
             );
-
 
         } catch (err: unknown) {
             console.error('Error deploying product:', err);

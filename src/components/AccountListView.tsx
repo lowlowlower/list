@@ -3,14 +3,83 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import Image from 'next/image';
-import Switch from 'react-switch'; // Import the switch component
+import Switch from 'react-switch';
 import TagList from '@/components/TagList';
-import type { Account, AutomationRun } from '@/types';
-import DeploymentHistoryModal from './DeploymentHistoryModal'; // Import the new modal
-import AutomationLogModal from './Modals/AutomationLogModal'; // Import the log modal
-import {  FaTrash } from 'react-icons/fa';
+import type { Account, AutomationRun, ScheduledProduct } from '@/types';
+import DeploymentHistoryModal from './DeploymentHistoryModal';
+import AutomationLogModal from './Modals/AutomationLogModal';
+import { FaTrash } from 'react-icons/fa';
 
 type DeployedItem = { id: string | number; '上架时间': string };
+
+// Define the new ScheduleDisplay component here
+const ScheduleDisplay: React.FC<{
+    title: string;
+    items: ScheduledProduct[] | null | undefined;
+    isAutomationEnabled: boolean;
+    accountName: string;
+    onDeleteItemFromArray: (accountName: string, arrayKey: '待上架', item: string) => void;
+    showTimeLeft?: boolean;
+}> = ({ title, items, isAutomationEnabled, accountName, onDeleteItemFromArray, showTimeLeft = false }) => {
+    if (!isAutomationEnabled && (!items || items.length === 0)) {
+        return null; // Don't show the section if automation is off and there are no items
+    }
+
+    const now = new Date();
+    
+    return (
+        <div>
+            <div className="flex justify-between items-center mb-2">
+                <h4 className="font-semibold text-sm text-gray-800 dark:text-gray-200">
+                    {title}
+                </h4>
+            </div>
+            <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+                {(!items || items.length === 0) ? (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
+                        {isAutomationEnabled ? `暂无${title}` : '自动化已关闭'}
+                    </p>
+                ) : (
+                    items.map((item, index) => {
+                        const isPlaceholder = 'isPlaceholder' in item && item.isPlaceholder;
+                        const scheduledTime = new Date(item.scheduled_at);
+
+                        const diffMillis = scheduledTime.getTime() - now.getTime();
+                        const diffHours = Math.floor(diffMillis / (1000 * 60 * 60));
+                        const diffMinutes = Math.floor((diffMillis % (1000 * 60 * 60)) / (1000 * 60));
+                        const timeLeft = showTimeLeft && diffMillis > 0 ? ` (剩 ${diffHours}h ${diffMinutes}m)` : '';
+
+                        return (
+                            <div key={item.id} className="group flex justify-between items-center text-xs p-2 rounded-md bg-gray-50 dark:bg-gray-700/50">
+                                <div className="flex-grow">
+                                    {isPlaceholder ? (
+                                        <span className="italic text-gray-500">
+                                            空位 {index + 1}{timeLeft}
+                                        </span>
+                                    ) : (
+                                        <span className="font-medium text-blue-600 dark:text-blue-400 truncate pr-2" title={`ID: ${item.id}`}>
+                                            ID: {item.id}{timeLeft}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="flex items-center">
+                                    <span className="text-gray-500 dark:text-gray-400">
+                                        {scheduledTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                                    </span>
+                                    <button onClick={() => onDeleteItemFromArray(accountName, '待上架', String(item.id))} className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700" title="删除此排期">
+                                        <FaTrash size={12} />
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })
+                )}
+            </div>
+        </div>
+    );
+};
+
+
 interface AccountListViewProps {
     accounts: Account[];
     loading: boolean;
@@ -22,14 +91,12 @@ interface AccountListViewProps {
     onSettingsClick: (account: Account) => void;
     onOpenAddAccountModal: () => void;
     onOpenAiAddAccountModal: () => void;
-    // Props for TagList interaction
     editingSchedule: { accountName: string; id: string; newTime: string } | null;
     setEditingSchedule: (editState: { accountName: string; id: string; newTime: string } | null) => void;
     onUpdateScheduleTime: (accountName: string, itemId: string, newTime: string) => void;
     onDeleteItemFromArray: (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, item: string) => void;
-    onToggleAutomation: (accountName: string, newStatus: boolean) => void; // New prop for toggling
-    fetchAccounts: () => void; // Prop to refresh accounts data from the parent
-    // Modals and their state can be passed as props, or handled via children, passing props is simpler for now
+    onToggleAutomation: (accountName: string, newStatus: boolean) => void;
+    fetchAccounts: () => void;
     isAddAccountModalOpen: boolean;
     closeAddAccountModal: () => void;
     newAccountName: string; setNewAccountName: (val: string) => void;
@@ -54,10 +121,9 @@ const AccountListView: React.FC<AccountListViewProps> = ({
     isAiAddAccountModalOpen, closeAiAddAccountModal, aiBatchInput, setAiBatchInput, isAiAddingAccounts, onConfirmAiAddAccounts,
     fetchAccounts
 }) => {
-    // State for the new deployment history modal
     const [historyModalData, setHistoryModalData] = useState<{ accountName: string; items: DeployedItem[] } | null>(null);
     const [automationStatus, setAutomationStatus] = useState<AutomationRun[]>([]);
-    const [isLogModalOpen, setIsLogModalOpen] = useState(false); // State for the log modal
+    const [isLogModalOpen, setIsLogModalOpen] = useState(false);
     const prevAutomationStatusRef = useRef<AutomationRun[]>([]);
 
     useEffect(() => {
@@ -66,28 +132,26 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                 const response = await fetch('/api/get-automation-status');
                 const data: AutomationRun[] = await response.json();
                 
-                // --- This is the new, smart logic ---
-                // Check if a task has just finished
                 const justFinishedAccounts = prevAutomationStatusRef.current
                     .filter(prevRun => !data.some(currentRun => currentRun.account_name === prevRun.account_name))
                     .map(run => run.account_name);
 
                 if (justFinishedAccounts.length > 0) {
                     console.log('Automation task finished for:', justFinishedAccounts.join(', '), '. Refetching accounts.');
-                    fetchAccounts(); // Call the function from parent to refresh data
+                    fetchAccounts();
                 }
                 
                 setAutomationStatus(data);
-                prevAutomationStatusRef.current = data; // Update the previous state ref
+                prevAutomationStatusRef.current = data;
             } catch (error) {
                 console.error("Failed to fetch automation status:", error);
             }
         };
 
-        fetchStatus(); // Fetch immediately on mount
-        const intervalId = setInterval(fetchStatus, 5000); // And then every 5 seconds
+        fetchStatus();
+        const intervalId = setInterval(fetchStatus, 5000);
 
-        return () => clearInterval(intervalId); // Cleanup on unmount
+        return () => clearInterval(intervalId);
     }, [fetchAccounts]);
 
     const handleShowAllHistory = (accountName: string, items: DeployedItem[]) => {
@@ -216,7 +280,6 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                                 </span>
                                                             </div>
                                                             
-                                                            {/* Deployment History Tags */}
                                                             <div className="flex flex-wrap gap-1.5 items-center">
                                                                  <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">近期上架:</span>
                                                                 {(() => {
@@ -287,65 +350,22 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                             width={36}
                                                         />
                                                     </div>
-                                                    <div className="flex flex-col gap-3 mt-2 border-t dark:border-gray-700 pt-3">
-                                                        {/* ---待上架队列--- */}
-                                                        <div>
-                                                            <div className="flex justify-between items-center mb-2">
-                                                                <h4 className="font-semibold text-sm text-gray-800 dark:text-gray-200">
-                                                                     今日排期
-                                                                </h4>
-                                                               
-                                                            </div>
-                                                            <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-                                                                {(() => {
-                                                                    const now = new Date();
-                                                                    // The todays_schedule from the parent is already filtered for today.
-                                                                    const futureItems = account.todays_schedule || [];
- 
-                                                                    if (futureItems.length === 0) {
-                                                                        return (
-                                                                            <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
-                                                                                {account.scheduling_rule?.enabled ? '今日暂无排期' : '自动化已关闭'}
-                                                                            </p>
-                                                                        );
-                                                                    }
- 
-                                                                    return futureItems.map((item, index) => {
-                                                                        const isPlaceholder = 'isPlaceholder' in item && item.isPlaceholder;
-                                                                        const scheduledTime = new Date(item.scheduled_at);
-                                                                        
-                                                                        const diffMillis = scheduledTime.getTime() - now.getTime();
-                                                                        const diffHours = Math.floor(diffMillis / (1000 * 60 * 60));
-                                                                        const diffMinutes = Math.floor((diffMillis % (1000 * 60 * 60)) / (1000 * 60));
-                                                                        const timeLeft = `${diffHours}h ${diffMinutes}m 后`;
-                                                                        
-                                                                        return (
-                                                                            <div key={item.id} className="group flex justify-between items-center text-xs p-2 rounded-md bg-gray-50 dark:bg-gray-700/50">
-                                                                                <div className="flex-grow">
-                                                                                    {isPlaceholder ? (
-                                                                                        <span className="italic text-gray-500">
-                                                                                            空位 {index + 1} (剩 {timeLeft})
-                                                                                        </span>
-                                                                                    ) : (
-                                                                                        <span className="font-medium text-blue-600 dark:text-blue-400 truncate pr-2" title={`ID: ${item.id}`}>
-                                                                                            ID: {item.id} (剩 {timeLeft})
-                                                                                        </span>
-                                                                                    )}
-                                                                                </div>
-                                                                                <div className="flex items-center">
-                                                                                    <span className="text-gray-500 dark:text-gray-400">
-                                                                                        {scheduledTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
-                                                                                    </span>
-                                                                                    <button onClick={() => onDeleteItemFromArray(account.name, '待上架', String(item.id))} className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-700" title="删除此排期">
-                                                                                        <FaTrash size={12} />
-                                                                                    </button>
-                                                                                </div>
-                                                                            </div>
-                                                                        );
-                                                                    });
-                                                                })()}
-                                                            </div>
-                                                        </div>
+                                                    <div className="flex flex-col gap-4 mt-2 border-t dark:border-gray-700 pt-3">
+                                                        <ScheduleDisplay
+                                                            title="今日排期"
+                                                            items={account.todays_schedule}
+                                                            isAutomationEnabled={account.scheduling_rule?.enabled ?? false}
+                                                            accountName={account.name}
+                                                            onDeleteItemFromArray={onDeleteItemFromArray}
+                                                            showTimeLeft={true}
+                                                        />
+                                                        <ScheduleDisplay
+                                                            title="明日排期"
+                                                            items={account.tomorrows_schedule}
+                                                            isAutomationEnabled={account.scheduling_rule?.enabled ?? false}
+                                                            accountName={account.name}
+                                                            onDeleteItemFromArray={onDeleteItemFromArray}
+                                                        />
                                                         <div>
                                                             <TagList
                                                                 title="已上架"
@@ -443,4 +463,4 @@ const AccountListView: React.FC<AccountListViewProps> = ({
     );
 };
 
-export default AccountListView; 
+export default AccountListView;
