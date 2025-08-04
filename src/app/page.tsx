@@ -23,6 +23,31 @@ if (!supabaseUrl || !supabaseAnonKey || !geminiApiKey) {
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=${geminiApiKey}`;
 
+// --- V5: Seeded PRNG for Deterministic Randomness ---
+// Simple hash function to create a seed from a string
+const cyrb53 = (str: string, seed = 0): number => {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0, ch; i < str.length; i++) {
+        ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1>>>0);
+};
+
+// Mulberry32 algorithm for a simple, seeded pseudo-random number generator
+const mulberry32 = (a: number): () => number => {
+    return function() {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+}
+// --- END Seeded PRNG ---
+
 // --- Helper Functions ---
 const getErrorMessage = (error: unknown): string => {
     if (error instanceof Error) return error.message;
@@ -277,8 +302,12 @@ export default function AccountsPage() {
                 const placeholders: ScheduledProduct[] = [];
                 const now = new Date();
                 
-                // Generate placeholders for today and the next few days to ensure the queue is always full
-                for (let dayOffset = 0; dayOffset < 3; dayOffset++) { // Generate for today and next 2 days
+                // --- V4 Schedule Logic: Today's Schedule (Now to Midnight) ---
+                const endOfDay = new Date();
+                endOfDay.setHours(23, 59, 59, 999);
+                
+                // Generate placeholders for today and tomorrow to ensure future slots are available for the planner.
+                for (let dayOffset = 0; dayOffset < 2; dayOffset++) { 
                     for (const time of scheduleTemplate) {
                         const [hour, minute] = time.split(':').map(Number);
                         const scheduleDate = new Date();
@@ -290,21 +319,38 @@ export default function AccountsPage() {
                             continue;
                         }
 
-                        // Check if a real product already occupies this exact slot
-                        const isOccupied = realProducts.some(p => new Date(p.scheduled_at).getTime() === scheduleDate.getTime());
+                        // --- V5: Deterministic Randomization ---
+                        const dateString = scheduleDate.toISOString().split('T')[0]; // e.g., "2023-10-27"
+                        const seedString = `${acc.name}-${dateString}-${time}`;
+                        const seed = cyrb53(seedString);
+                        const random = mulberry32(seed);
+
+                        const baseTime = scheduleDate.getTime();
+                        const thirtyMinutesInMillis = 30 * 60 * 1000;
+                        const randomOffset = (random() * 2 - 1) * thirtyMinutesInMillis;
+                        const randomizedTime = new Date(baseTime + randomOffset);
+                        // --- END ---
+
+                        // Check if a real product already occupies this exact slot (we can check a small window around the randomized time)
+                        const isOccupied = realProducts.some(p => Math.abs(new Date(p.scheduled_at).getTime() - randomizedTime.getTime()) < 60000 ); // 1 min proximity check
 
                         if (!isOccupied) {
                             placeholders.push({
                                 id: `placeholder-${crypto.randomUUID()}`,
-                                scheduled_at: scheduleDate.toISOString(),
-                            isPlaceholder: true,
-                        });
-                    }
+                                scheduled_at: randomizedTime.toISOString(), // Use the randomized time for the placeholder UI
+                                isPlaceholder: true,
+                            });
+                        }
                     }
                 }
 
                 const todays_schedule = [...realProducts, ...placeholders]
-                        .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+                    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+                    .filter(item => {
+                        const itemTime = new Date(item.scheduled_at).getTime();
+                        // Only include items from now until midnight today.
+                        return itemTime >= now.getTime() && itemTime <= endOfDay.getTime();
+                    });
 
 
                 return {
@@ -605,102 +651,53 @@ export default function AccountsPage() {
     
  
 
-    const handleDeleteItemFromArray = async (accountName: string, arrayKey: keyof Pick<Account, '待上架' | '已上架'>, itemToDelete: string) => {
-        const validArrayKeys: (keyof Pick<Account, '待上架' | '已上架'>)[] = ['待上架', '已上架'];
-        if (!validArrayKeys.includes(arrayKey)) {
-            console.error("Invalid key passed to handleDeleteItemFromArray:", arrayKey);
+    const handleDeleteItemFromArray = async (accountName: string, arrayKey: '待上架' | '已上架', itemToDeleteId: string) => {
+        // Since placeholders are virtual, we can only "delete" (i.e., unschedule) real products.
+        if (itemToDeleteId.startsWith('placeholder-')) {
+            alert("不能删除虚拟的占位排期，占位排期由系统自动管理。如需空出位置，请先上架一个真实商品，再将其删除。");
             return;
         }
-
-        const confirmed = window.confirm(`确定要从 "${arrayKey}" 列表中删除 "${itemToDelete}" 吗？`);
+    
+        // We are unscheduling a REAL product.
+        const confirmed = window.confirm(`确定要从 "${arrayKey}" 列表中移除商品 #${itemToDeleteId} 的排期吗？\n\n此商品将返回商品列表，不会被删除。`);
         if (!confirmed) return;
-
-        const originalAccount = allAccounts.find(acc => acc.name === accountName);
-        if (!originalAccount) return;
-
-        const dbFieldToUpdate = arrayKey === '已上架' ? '已上架json' : '待上架';
-
-        const originalArray = (originalAccount[arrayKey] as (string | ScheduledProduct)[] | null) || [];
-        
-        let newArray;
-        const itemIndex = originalArray.findIndex(item => (typeof item === 'object' ? item.id : item) === itemToDelete);
-        
-        if (itemIndex === -1) {
-            console.error("Item to delete not found in array");
+    
+        const account = allAccounts.find(acc => acc.name === accountName);
+        if (!account) {
+            alert("错误：找不到当前操作的账号信息。");
             return;
         }
-
-        const itemObject = originalArray[itemIndex];
-
-        if (typeof itemObject === 'object' && !itemObject.isPlaceholder) {
-            const newPlaceholder: ScheduledProduct = {
-                id: `待定商品 (来自 ${itemObject.id})`,
-                scheduled_at: itemObject.scheduled_at,
-                isPlaceholder: true,
-            };
-            newArray = [...originalArray];
-            newArray[itemIndex] = newPlaceholder;
-        } 
-        else {
-            newArray = originalArray.filter(item => (typeof item === 'object' ? item.id : item) !== itemToDelete);
-
-            const rule = originalAccount.scheduling_rule;
-            const items_per_day = rule?.items_per_day ?? 0;
-
-            if (arrayKey === '待上架' && rule && items_per_day > 0 && newArray.length < items_per_day) {
-                const intervalMillis = (24 * 60 * 60 * 1000) / items_per_day;
-                let lastScheduleTime = 0;
-                if (newArray.length > 0) {
-                    const scheduleTimes = newArray
-                        .map(item => (item as ScheduledProduct).scheduled_at ? new Date((item as ScheduledProduct).scheduled_at).getTime() : 0)
-                        .filter(time => time > 0);
-                    if (scheduleTimes.length > 0) {
-                        lastScheduleTime = Math.max(...scheduleTimes);
-                    }
-                }
-                
-                const nextScheduleTime = lastScheduleTime + intervalMillis;
-                newArray.push({
-                    id: `placeholder-${crypto.randomUUID()}`,
-                    scheduled_at: new Date(nextScheduleTime).toISOString(),
-                    isPlaceholder: true,
-                });
-            }
+    
+        // The '待上架' array in our state model now ONLY contains real products.
+        const currentPendingProducts = (account['待上架'] || []) as ScheduledProduct[];
+    
+        // Ensure IDs are compared as strings for consistency.
+        const newPendingProducts = currentPendingProducts.filter(item => String(item.id) !== String(itemToDeleteId));
+    
+        // Check if the item was actually found and removed.
+        if (newPendingProducts.length === currentPendingProducts.length) {
+            alert(`错误：在待上架列表中找不到要删除的商品 #${itemToDeleteId}。可能已被移除，正在刷新数据。`);
+            await fetchAccounts();
+            return;
         }
-        
+    
         try {
             const { error } = await supabase
                 .from('accounts_duplicate')
-                .update({ [dbFieldToUpdate]: newArray, updated_at: new Date().toISOString() })
+                .update({ '待上架': newPendingProducts, updated_at: new Date().toISOString() })
                 .eq('name', accountName);
-
-            if (error) {
-                alert(`数据库删除失败: ${getErrorMessage(error)}`);
-                fetchAccounts();
-                return; 
-            }
+    
+            if (error) throw error;
+    
+            alert(`商品 #${itemToDeleteId} 已成功从排期中移除。`);
             
-            setAllAccounts(prevAccounts => 
-                prevAccounts.map(acc => {
-                    if (acc.name === accountName) {
-                        const updatedAccount = { ...acc, [dbFieldToUpdate]: newArray };
-                        const cleanPendingProducts = Array.isArray(newArray) 
-                            ? newArray.filter(p => p !== null && p !== undefined)
-                            : [];
-                        
-                        const todays_schedule: ScheduledProduct[] = (cleanPendingProducts as ScheduledProduct[])
-                            .filter(item => typeof item === 'object' && item.scheduled_at)
-                            .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-                        
-                        return { ...updatedAccount, todays_schedule };
-                    }
-                    return acc;
-                })
-            );
-
+            // Refetch all data to get the new state with updated dynamic placeholders.
+            await fetchAccounts();
+    
         } catch (err: unknown) {
-            alert(`删除失败: ${getErrorMessage(err)}`);
-            fetchAccounts();
+            alert(`从排期中移除商品失败: ${getErrorMessage(err)}`);
+            // Refetch anyway to ensure consistency with the database.
+            await fetchAccounts();
         }
     };
 
@@ -1010,10 +1007,10 @@ export default function AccountsPage() {
 
         const placeholderToReplace = currentPending[placeholderIndex];
 
-        // The new item inherits the placeholder's time but is now a real product.
-                const newScheduledItem: ScheduledProduct = {
-                    id: productId,
-            scheduled_at: placeholderToReplace.scheduled_at, // Inherit the placeholder's time
+        // The new item inherits the placeholder's (already randomized) time.
+        const newScheduledItem: ScheduledProduct = {
+            id: productId,
+            scheduled_at: placeholderToReplace.scheduled_at,
             isPlaceholder: false,
         };
 
@@ -1080,22 +1077,24 @@ export default function AccountsPage() {
     const handleSaveRule = async (accountName: string, scheduleTemplate: string[]) => {
         setIsSubmitting(true);
         try {
+            // Filter out any invalid or empty time strings before saving.
             const cleanTemplate = scheduleTemplate.filter(t => t && /^\d{2}:\d{2}$/.test(t)).sort();
-
+            
             const { error } = await supabase
                 .from('accounts_duplicate')
                 .update({ schedule_template: cleanTemplate, updated_at: new Date().toISOString() })
                 .eq('name', accountName);
 
-            if (error) throw error;
+            if (error) {
+                throw error;
+            }
             
-            alert('每日时刻表已保存！');
-            
+            alert('每日時刻表已保存！');
             await fetchAccounts();
-
+            
         } catch (error) {
             console.error('Failed to save schedule template:', error);
-            alert(`保存时刻表失败: ${getErrorMessage(error)}`);
+            alert(`保存時刻表失敗: ${getErrorMessage(error)}`);
         } finally {
             setIsSubmitting(false);
             setEditingAccount(null);
@@ -1580,8 +1579,8 @@ ${aiBatchInput}
                     onSaveField={handleSaveAccountField}
                     onSaveKeywords={handleSaveKeywords}
                     onGenerateKeywords={handleGenerateKeywords}
-                    onSaveRule={() => handleSaveRule(editingAccount.name, editingAccount.schedule_template || [])}
-                    onResetSchedule={() => handleResetSchedule(editingAccount.name)}
+                    onSaveRule={handleSaveRule}
+                    onResetSchedule={handleResetSchedule}
                     onNavigateToKeywords={handleAccountSelectForKeywords}
                     editingCopywritingPrompts={editingCopywritingPrompts}
                     setEditingCopywritingPrompts={setEditingCopywritingPrompts}

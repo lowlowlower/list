@@ -292,45 +292,25 @@ const AccountListView: React.FC<AccountListViewProps> = ({
                                                         <div>
                                                             <div className="flex justify-between items-center mb-2">
                                                                 <h4 className="font-semibold text-sm text-gray-800 dark:text-gray-200">
-                                                                    未来24小时排期
+                                                                     今日排期
                                                                 </h4>
-                                                                {account.scheduling_rule?.enabled && (
-                                                                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                                                                        <span>每隔 {(24 / (account.scheduling_rule?.items_per_day || 1)).toFixed(1)}h 上架</span>
-                                                                    </div>
-                                                                )}
+                                                               
                                                             </div>
                                                             <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
                                                                 {(() => {
                                                                     const now = new Date();
-                                                                    const futureItems = account.todays_schedule?.filter(item => new Date(item.scheduled_at) > now) || [];
-
+                                                                    // The todays_schedule from the parent is already filtered for today.
+                                                                    const futureItems = account.todays_schedule || [];
+ 
                                                                     if (futureItems.length === 0) {
                                                                         return (
                                                                             <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
-                                                                                {account.scheduling_rule?.enabled ? '暂无未来排期' : '自动化已关闭'}
+                                                                                {account.scheduling_rule?.enabled ? '今日暂无排期' : '自动化已关闭'}
                                                                             </p>
                                                                         );
                                                                     }
-
-                                                                    const firstUpcomingItem = futureItems[0];
-                                                                    const scheduleAnchorTime = new Date(firstUpcomingItem.scheduled_at);
-                                                                    const twentyFourHoursFromAnchor = new Date(scheduleAnchorTime.getTime() + 24 * 60 * 60 * 1000);
-                                                                    
-                                                                    const upcomingSlots = account.todays_schedule?.filter(item => {
-                                                                        const scheduledTime = new Date(item.scheduled_at);
-                                                                        return scheduledTime >= scheduleAnchorTime && scheduledTime < twentyFourHoursFromAnchor;
-                                                                    }) || [];
-
-                                                                    if (upcomingSlots.length === 0) {
-                                                                        return (
-                                                                            <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
-                                                                                {account.scheduling_rule?.enabled ? '未来24小时内暂无排期' : '自动化已关闭'}
-                                                                            </p>
-                                                                        );
-                                                                    }
-
-                                                                    return upcomingSlots.map((item, index) => {
+ 
+                                                                    return futureItems.map((item, index) => {
                                                                         const isPlaceholder = 'isPlaceholder' in item && item.isPlaceholder;
                                                                         const scheduledTime = new Date(item.scheduled_at);
                                                                         

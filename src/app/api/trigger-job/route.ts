@@ -29,6 +29,29 @@ type DeployedProduct = {
     [key: string]: unknown;
 };
 
+// --- V5: Seeded PRNG for Deterministic Randomness (must be identical to frontend) ---
+const cyrb53 = (str: string, seed = 0): number => {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0, ch; i < str.length; i++) {
+        ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1>>>0);
+};
+
+const mulberry32 = (a: number): () => number => {
+    return function() {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+}
+// --- END Seeded PRNG ---
+
 const runId = crypto.randomUUID();
 async function log(level: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR' | 'DEBUG', message: string, metadata: object = {}) {
     // For server logs, pretty-print the metadata for better readability
@@ -126,77 +149,90 @@ export async function GET(request: NextRequest) {
             }
         } else {
             // --- MODE 2: PLANNER ---
-            // The schedule is empty. Find the newest product and schedule it for the first available future slot.
-            await log('INFO', `No real products in schedule. Attempting to schedule into first available slot.`, { account_name: account.name });
+            // The schedule is empty. Replicate the frontend's logic to find the first available
+            // placeholder slot and schedule the newest product into it.
+            await log('INFO', `No real products in schedule. Finding first available slot to occupy.`, { account_name: account.name });
 
             const scheduleTemplate = account.schedule_template || ['09:00', '12:00', '15:00', '18:00', '21:00'];
             if (!scheduleTemplate || scheduleTemplate.length === 0) {
                 await log('WARN', `Account has no schedule template. Cannot auto-schedule.`, { account_name: account.name });
             } else {
-                // Find the next available time slot
-                let nextAvailableSlot: Date | null = null;
-                const sortedTemplate = [...scheduleTemplate].sort();
+                // --- REPLICATE FRONTEND PLACEHOLDER GENERATION ---
+                const placeholders: ScheduledProduct[] = [];
+                // Generate for today and tomorrow to find the absolute next slot.
+                for (let dayOffset = 0; dayOffset < 2; dayOffset++) { 
+                    for (const time of scheduleTemplate) {
+                        const [hour, minute] = time.split(':').map(Number);
+                        if (isNaN(hour) || isNaN(minute)) continue;
 
-                // Look for a slot today
-                for (const time of sortedTemplate) {
-                    const [hour, minute] = time.split(':').map(Number);
-                    if (isNaN(hour) || isNaN(minute)) continue;
-                    const potentialSlot = new Date();
-                    potentialSlot.setHours(hour, minute, 0, 0);
-                    if (potentialSlot.getTime() > now.getTime()) {
-                        nextAvailableSlot = potentialSlot;
-                        break;
+                        const scheduleDate = new Date();
+                        scheduleDate.setDate(now.getDate() + dayOffset);
+                        scheduleDate.setHours(hour, minute, 0, 0);
+
+                        if (scheduleDate.getTime() <= now.getTime()) {
+                            continue;
+                        }
+
+                        // --- V5: Deterministic Randomization ---
+                        const dateString = scheduleDate.toISOString().split('T')[0];
+                        const seedString = `${account.name}-${dateString}-${time}`;
+                        const seed = cyrb53(seedString);
+                        const random = mulberry32(seed);
+
+                        const baseTime = scheduleDate.getTime();
+                        const thirtyMinutesInMillis = 30 * 60 * 1000;
+                        const randomOffset = (random() * 2 - 1) * thirtyMinutesInMillis;
+                        const randomizedTime = new Date(baseTime + randomOffset);
+                        // --- END ---
+
+                        placeholders.push({
+                            id: `placeholder-${crypto.randomUUID()}`,
+                            scheduled_at: randomizedTime.toISOString(),
+                            isPlaceholder: true,
+                        });
                     }
                 }
+                // --- END REPLICATION ---
 
-                // If no slot was found for today, find the first slot for tomorrow
-                if (!nextAvailableSlot) {
-                    const tomorrow = new Date();
-                    tomorrow.setDate(now.getDate() + 1);
-                    const [hour, minute] = sortedTemplate[0].split(':').map(Number);
-                    if (!isNaN(hour) && !isNaN(minute)) {
-                       tomorrow.setHours(hour, minute, 0, 0);
-                       nextAvailableSlot = tomorrow;
-                    }
-                }
+                if (placeholders.length > 0) {
+                    // Find the very first available slot from the generated placeholders
+                    const firstAvailableSlot = placeholders.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())[0];
 
-                if (nextAvailableSlot) {
-                    // Find a product to schedule
-                    const pendingIds = new Set(pendingQueue.map(p => String(p.id)));
-                    const { data: latestProducts, error: latestProductError } = await supabase
+                    // Find a product to schedule into this slot
+                    const { data: latestProduct, error: latestProductError } = await supabase
                         .from('search_results_duplicate_本人')
                         .select('id')
                         .eq('type', account.name)
                         .order('created_at', { ascending: false })
-                        .limit(10);
+                        .limit(1)
+                        .single();
 
                     if (latestProductError) {
-                        await log('ERROR', `Failed to fetch latest products for scheduling.`, { account_name: account.name, error: latestProductError.message });
-                    } else {
-                        const productToSchedule = latestProducts.find(p => !pendingIds.has(String(p.id)));
-                        if (productToSchedule) {
-                            const newScheduledItem: ScheduledProduct = {
-                                id: String(productToSchedule.id),
-                                scheduled_at: nextAvailableSlot.toISOString(),
-                                isPlaceholder: false,
-                            };
-                            const updatedPendingQueue = [...pendingQueue, newScheduledItem];
-                            const { error: queueError } = await supabase
-                                .from('accounts_duplicate')
-                                .update({ '待上架': updatedPendingQueue })
-                                .eq('name', account.name);
+                        await log('ERROR', `Failed to fetch latest product for scheduling.`, { account_name: account.name, error: latestProductError.message });
+                    } else if (latestProduct) {
+                        const newScheduledItem: ScheduledProduct = {
+                            id: String(latestProduct.id),
+                            scheduled_at: firstAvailableSlot.scheduled_at, // Use the exact time from the placeholder
+                            isPlaceholder: false,
+                        };
+                        
+                        const updatedPendingQueue = [newScheduledItem]; // The queue was empty, so it's just this one.
+                        
+                        const { error: queueError } = await supabase
+                            .from('accounts_duplicate')
+                            .update({ '待上架': updatedPendingQueue })
+                            .eq('name', account.name);
 
-                            if (queueError) {
-                                await log('ERROR', `Failed to save auto-scheduled product to queue.`, { product_id: newScheduledItem.id, error: queueError.message });
-                            } else {
-                                await log('SUCCESS', `Successfully auto-scheduled product ${newScheduledItem.id} for ${nextAvailableSlot.toLocaleString('zh-CN')}.`, { product_id: newScheduledItem.id });
-                            }
+                        if (queueError) {
+                            await log('ERROR', `Failed to save auto-scheduled product to queue.`, { product_id: newScheduledItem.id, error: queueError.message });
                         } else {
-                            await log('INFO', `No new products found in warehouse to schedule for account ${account.name}.`, { account_name: account.name });
+                            await log('SUCCESS', `Successfully occupied first slot. Product ${newScheduledItem.id} is scheduled for ${new Date(newScheduledItem.scheduled_at).toLocaleString('zh-CN')}.`, { product_id: newScheduledItem.id });
                         }
+                    } else {
+                        await log('INFO', `Warehouse is empty for account ${account.name}. Nothing to schedule.`, { account_name: account.name });
                     }
                 } else {
-                     await log('WARN', `Could not determine a next available slot from the template.`, { account_name: account.name, template: sortedTemplate });
+                     await log('WARN', `Could not generate any future placeholder slots from the template.`, { account_name: account.name });
                 }
             }
         }
@@ -204,40 +240,40 @@ export async function GET(request: NextRequest) {
         // --- UNIFIED PROCESSING BLOCK (only runs if a product was found in EXECUTOR mode) ---
         if (productToProcessId) {
             await log('DEBUG', `Product selected for processing.`, { account_name: account.name, product_id: productToProcessId, source: isFromSchedule ? 'schedule' : 'warehouse' });
-            
-            // --- Unified Processing Block ---
-            const { data: dbProduct, error: productError } = await supabase
-                .from('search_results_duplicate_本人')
-                .select('id, result_text_content')
-                .eq('id', productToProcessId)
-                .single();
 
-            if (productError || !dbProduct) {
+            // --- Unified Processing Block ---
+        const { data: dbProduct, error: productError } = await supabase
+            .from('search_results_duplicate_本人')
+            .select('id, result_text_content')
+                .eq('id', productToProcessId)
+            .single();
+
+        if (productError || !dbProduct) {
                 await log('ERROR', `Product ${productToProcessId} not found in database, cannot process.`, { product_id: productToProcessId, error: productError?.message });
                 if (isFromSchedule) {
                     const updatedFailingQueue = pendingQueue.filter(p => String(p.id) !== productToProcessId);
-                    await supabase.from('accounts_duplicate').update({ '待上架': updatedFailingQueue }).eq('name', account.name);
+            await supabase.from('accounts_duplicate').update({ '待上架': updatedFailingQueue }).eq('name', account.name);
                 }
-                continue;
-            }
+            continue;
+        }
 
             // AI Processing
-            const originalContent = dbProduct.result_text_content || '';
-            const copywritingPrompt = account['文案生成prompt'] || 'Make this text better.';
-            const aiModifiedTextRaw = await callAIApi(`${copywritingPrompt}\n\n[Original Text]:\n${originalContent}`);
-            const aiModifiedText = aiModifiedTextRaw.replace(/[*#]/g, '').trim();
-            const newImageUrl = await generateAndUploadImage(aiModifiedText);
-            
+        const originalContent = dbProduct.result_text_content || '';
+        const copywritingPrompt = account['文案生成prompt'] || 'Make this text better.';
+        const aiModifiedTextRaw = await callAIApi(`${copywritingPrompt}\n\n[Original Text]:\n${originalContent}`);
+        const aiModifiedText = aiModifiedTextRaw.replace(/[*#]/g, '').trim();
+        const newImageUrl = await generateAndUploadImage(aiModifiedText);
+        
             // Update product table
-            const { error: updateProductError } = await supabase
-                .from('search_results_duplicate_本人')
-                .update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true })
-                .eq('id', dbProduct.id);
+        const { error: updateProductError } = await supabase
+            .from('search_results_duplicate_本人')
+            .update({ '修改后文案': aiModifiedText, result_image_url: newImageUrl, is_ai_generated: true })
+            .eq('id', dbProduct.id);
 
-            if (updateProductError) {
+        if (updateProductError) {
                  await log('ERROR', `Failed to update product ${dbProduct.id} after AI processing.`, { product_id: dbProduct.id, error: updateProductError.message });
-                 continue;
-            }
+             continue;
+        }
 
             // Update queues
             let updatedPendingQueue = pendingQueue;
@@ -245,7 +281,7 @@ export async function GET(request: NextRequest) {
                 updatedPendingQueue = pendingQueue.filter(p => String(p.id) !== productToProcessId);
             }
             const newlyDeployedItem = { id: productToProcessId, deployed_at: now.toISOString() };
-            const updatedDeployedQueue = [...deployedQueue, newlyDeployedItem];
+        const updatedDeployedQueue = [...deployedQueue, newlyDeployedItem];
 
             await log('DEBUG', `Preparing to update queues for account: ${account.name}`, {
                 account_name: account.name,
@@ -254,15 +290,15 @@ export async function GET(request: NextRequest) {
                 payload_deployed_queue: updatedDeployedQueue
             });
 
-            const { error: queueError } = await supabase
-                .from('accounts_duplicate')
-                .update({ 
-                    '待上架': updatedPendingQueue,
-                    '已上架json': updatedDeployedQueue 
-                })
-                .eq('name', account.name);
+        const { error: queueError } = await supabase
+            .from('accounts_duplicate')
+            .update({ 
+                '待上架': updatedPendingQueue,
+                '已上架json': updatedDeployedQueue 
+            })
+            .eq('name', account.name);
 
-            if (queueError) {
+        if (queueError) {
                 await log('ERROR', `Failed to update queues for account ${account.name}.`, { error: queueError.message });
             } else {
                 await log('SUCCESS', `Successfully processed and deployed product ${productToProcessId}.`, { product_id: productToProcessId });
