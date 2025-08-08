@@ -8,6 +8,7 @@ import * as cheerio from 'cheerio';
 const supabaseUrl = "https://urfibhtfqgffpanpsjds.supabase.co";
 const supabaseServiceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyZmliaHRmcWdmZnBhbnBzamRzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NTY0NSwiZXhwIjoyMDUxMzYxNjQ1fQ.fHIeQZR1l_lGPV7hYJkcahkEvYytIBpasXOg4m1atAs";
 const geminiApiKey = "AIzaSyDmfaMC3pHdY6BYCvL_1pWZF5NLLkh28QU";
+const deepseekApiKey = "sk-78a9fd015e054281a3eb0a0712d5e6d0";
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey, {
     global: {
@@ -15,6 +16,55 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
     },
 });
 const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=${geminiApiKey}`;
+const deepseekApiUrl = 'https://api.deepseek.com/chat/completions';
+const LOG_RETENTION_LIMIT = 250; // 5 pages * 50 items/page
+
+async function cleanupOldLogs() {
+    try {
+        const { count, error: countError } = await supabase
+            .from('automation_logs')
+            .select('*', { count: 'exact', head: true });
+
+        if (countError) {
+            await log('ERROR', 'Failed to count automation logs for cleanup.', { error: countError.message });
+            return;
+        }
+
+        if (count !== null && count > LOG_RETENTION_LIMIT) {
+            const deleteCount = count - LOG_RETENTION_LIMIT;
+            await log('INFO', `Log retention limit exceeded. Deleting oldest ${deleteCount} logs.`, { current: count, limit: LOG_RETENTION_LIMIT });
+
+            const { data: logsToDelete, error: selectError } = await supabase
+                .from('automation_logs')
+                .select('id')
+                .order('created_at', { ascending: true })
+                .limit(deleteCount);
+
+            if (selectError) {
+                await log('ERROR', 'Failed to select old logs for deletion.', { error: selectError.message });
+                return;
+            }
+
+            if (logsToDelete && logsToDelete.length > 0) {
+                const idsToDelete = logsToDelete.map(log => log.id);
+                const { error: deleteError } = await supabase
+                    .from('automation_logs')
+                    .delete()
+                    .in('id', idsToDelete);
+
+                if (deleteError) {
+                    await log('ERROR', 'Failed to delete old logs.', { error: deleteError.message });
+                } else {
+                    await log('SUCCESS', `Successfully deleted ${idsToDelete.length} old logs.`, { count: idsToDelete.length });
+                }
+            }
+        }
+    } catch (cleanupError) {
+        const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        await log('ERROR', 'An unexpected error occurred during log cleanup.', { error: errorMessage });
+    }
+}
+
 
 type AutomationAccount = {
     name: string;
@@ -61,17 +111,48 @@ async function log(level: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR' | 'DEBUG', messa
 }
 
 async function callAIApi(prompt: string): Promise<string> {
-    const res = await fetch(geminiApiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-    });
-    if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(`Gemini API Error: ${errorData.error?.message || 'Unknown error'}`);
+    try {
+        // --- Primary API: Gemini ---
+        const res = await fetch(geminiApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(`Gemini API Error: ${errorData.error?.message || 'Unknown error'}`);
+        }
+        const data = await res.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } catch (geminiError) {
+        const errorMessage = geminiError instanceof Error ? geminiError.message : String(geminiError);
+        await log('WARN', 'Gemini API failed, switching to DeepSeek fallback.', { error: errorMessage });
+        
+        // --- Fallback API: DeepSeek ---
+        try {
+            const res = await fetch(deepseekApiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${deepseekApiKey}`
+                },
+                body: JSON.stringify({
+                    model: 'deepseek-chat',
+                    messages: [{ role: 'user', content: prompt }],
+                })
+            });
+            if (!res.ok) {
+                const errorData = await res.json();
+                throw new Error(`DeepSeek API Error: ${errorData.error?.message || 'Unknown error'}`);
+            }
+            const data = await res.json();
+            return data.choices?.[0]?.message?.content || '';
+        } catch (deepseekError) {
+            const deepseekErrorMessage = deepseekError instanceof Error ? deepseekError.message : String(deepseekError);
+            await log('ERROR', 'Both Gemini and DeepSeek APIs failed.', { gemini_error: errorMessage, deepseek_error: deepseekErrorMessage });
+            throw new Error('All AI providers are currently unavailable.');
+        }
     }
-    const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
 // --- V10: The Final Boss - Hardened AI Prompts & Failsafes ---
@@ -124,11 +205,9 @@ function purifyHtml(html: string): string {
 async function generateAndUploadImage(fullText: string): Promise<string> {
     let imageBuffer: Buffer;
 
-    // Step 1: AI Summarizer - Hardened Prompt
     const summarizerPrompt = `Analyze the following text and extract the core, objective service or product name. Be neutral and professional, like a news headline. Do not use promotional language. Maximum 20 characters.\n\nText: "${fullText}"\n\nReturn ONLY the core service/product name.`;
     let coreDescription = (await callAIApi(summarizerPrompt)).trim();
     
-    // Failsafe for empty summary
     if (!coreDescription) {
         log('WARN', 'AI summarizer returned empty. Using fallback.');
         coreDescription = fullText.substring(0, 20);
@@ -136,7 +215,6 @@ async function generateAndUploadImage(fullText: string): Promise<string> {
     await log('INFO', `AI summarized the core description.`, { summary: coreDescription });
 
     try {
-        // Step 2: Attempt complex design - Hardened Prompt
         const randomStyle = DESIGN_STYLES[Math.floor(Math.random() * DESIGN_STYLES.length)];
         const designPrompt = `
 You are a minimalist graphic designer. Create an HTML visual for Satori.
@@ -165,7 +243,6 @@ Return ONLY the raw HTML code for a single \`<div>\` that fills the canvas.
         await log('SUCCESS', 'Generated complex image design.', { textUsed: coreDescription });
 
     } catch (error) {
-        // Step 3: Failsafe Fallback
         const errorMessage = error instanceof Error ? error.message : String(error);
         await log('WARN', 'Complex design failed. Falling back to simple mode.', { error: errorMessage, textUsed: coreDescription });
         imageBuffer = await generateSimpleImageBuffer(coreDescription);
@@ -214,15 +291,15 @@ export async function GET(request: NextRequest) {
                 }
             }
         }
-
+       
         const now = new Date();
         const realScheduledProducts = pendingQueue.filter(p => !p.isPlaceholder);
-            const dueProduct = realScheduledProducts.find(p => new Date(p.scheduled_at) <= now);
+        const dueProduct = realScheduledProducts.find(p => new Date(p.scheduled_at) <= now);
 
-            if (dueProduct) {
+        if (dueProduct) {
             // --- MODE 1: EXECUTOR (Process Manually Scheduled Item) ---
             const productToProcessId = String(dueProduct.id);
-                await log('INFO', `Found due scheduled product ${productToProcessId}.`, { account_name: account.name, product_id: productToProcessId });
+            await log('INFO', `Found due scheduled product ${productToProcessId}.`, { account_name: account.name, product_id: productToProcessId });
 
             const { data: dbProduct, error: productError } = await supabase
                 .from('search_results_duplicate_本人')
@@ -287,35 +364,54 @@ export async function GET(request: NextRequest) {
                 } else {
                     await log('SUCCESS', `Successfully processed new product ${productToProcess.id}. Now finding a slot...`, { product_id: productToProcess.id });
                     
+                    const realProducts = (account['待上架'] || []).filter(item => item && !item.isPlaceholder) as ScheduledProduct[];
                     const scheduleTemplate = account.schedule_template || ['09:00', '12:00', '15:00', '18:00', '21:00'];
-                const placeholders: ScheduledProduct[] = [];
-                for (let dayOffset = 0; dayOffset < 2; dayOffset++) { 
-                    for (const time of scheduleTemplate) {
-                        const [hour, minute] = time.split(':').map(Number);
-                        if (isNaN(hour) || isNaN(minute)) continue;
-                        const scheduleDate = new Date();
-                        scheduleDate.setDate(now.getDate() + dayOffset);
-                        scheduleDate.setHours(hour, minute, 0, 0);
-                            if (scheduleDate.getTime() <= now.getTime()) continue;
+                    const placeholders: ScheduledProduct[] = [];
 
-                        const dateString = scheduleDate.toISOString().split('T')[0];
-                        const seedString = `${account.name}-${dateString}-${time}`;
-                        const seed = cyrb53(seedString);
-                        const random = mulberry32(seed);
-                        const baseTime = scheduleDate.getTime();
-                        const thirtyMinutesInMillis = 30 * 60 * 1000;
-                        const randomOffset = (random() * 2 - 1) * thirtyMinutesInMillis;
-                        const randomizedTime = new Date(baseTime + randomOffset);
+                    for (let dayOffset = 0; dayOffset < 2; dayOffset++) {
+                        for (const time of scheduleTemplate) {
+                            const [hour, minute] = time.split(':').map(Number);
+                            if (isNaN(hour) || isNaN(minute)) continue;
+
+                            const scheduleDate = new Date();
+                            scheduleDate.setDate(now.getDate() + dayOffset);
+                            scheduleDate.setHours(hour, minute, 0, 0);
+
+                            if (dayOffset === 0 && scheduleDate.getTime() < now.getTime()) {
+                                continue;
+                            }
+
+                            const dateString = scheduleDate.toISOString().split('T')[0];
+                            const seedString = `${account.name}-${dateString}-${time}`;
+                            const seed = cyrb53(seedString);
+                            const random = mulberry32(seed);
+
+                            const baseTime = scheduleDate.getTime();
+                            const thirtyMinutesInMillis = 30 * 60 * 1000;
+                            const randomOffset = (random() * 2 - 1) * thirtyMinutesInMillis;
+                            const randomizedTime = new Date(baseTime + randomOffset);
                             
-                            placeholders.push({ id: `placeholder-${crypto.randomUUID()}`, scheduled_at: randomizedTime.toISOString(), isPlaceholder: true });
+                            const isOccupied = realProducts.some(p => Math.abs(new Date(p.scheduled_at).getTime() - randomizedTime.getTime()) < 60000);
+
+                            if (!isOccupied) {
+                                placeholders.push({
+                                    id: `placeholder-${crypto.randomUUID()}`,
+                                    scheduled_at: randomizedTime.toISOString(),
+                                    isPlaceholder: true,
+                                });
+                            }
                         }
                     }
 
-                    const nextAvailableSlot = placeholders.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())[0];
+                    const futurePlaceholders = placeholders.filter(p => new Date(p.scheduled_at).getTime() > now.getTime());
+                    const nextAvailableSlot = futurePlaceholders.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())[0];
+
 
                     if (nextAvailableSlot) {
                         const newScheduledItem: ScheduledProduct = { id: String(productToProcess.id), scheduled_at: nextAvailableSlot.scheduled_at, isPlaceholder: false };
-                        const { error: scheduleError } = await supabase.from('accounts_duplicate').update({ '待上架': [newScheduledItem] }).eq('name', account.name);
+                        // Critical change: Only add to the queue, don't replace it.
+                        const updatedPendingQueue = [...realProducts, newScheduledItem];
+                        const { error: scheduleError } = await supabase.from('accounts_duplicate').update({ '待上架': updatedPendingQueue }).eq('name', account.name);
 
                         if (scheduleError) {
                             await log('ERROR', `Failed to schedule processed product ${productToProcess.id}.`, { error: scheduleError.message });
@@ -341,6 +437,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    await cleanupOldLogs();
     await log('SUCCESS', 'Cron job finished successfully.');
     return NextResponse.json({ status: 'ok', message: 'Cron job executed successfully.' });
   } catch (error) {
@@ -348,4 +445,4 @@ export async function GET(request: NextRequest) {
     await log('ERROR', 'Cron job failed with an unhandled exception.', { error: errorMessage });
     return NextResponse.json({ status: 'error', error: errorMessage }, { status: 500 });
   }
-} 
+}
