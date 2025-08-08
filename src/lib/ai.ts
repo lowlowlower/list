@@ -6,12 +6,16 @@ import sharp from 'sharp';
 import fs from 'fs/promises';
 import path from 'path';
 import { createClient } from '@supabase/supabase-js';
+import crossFetch from 'cross-fetch';
 
 // --- Reusable Supabase Client ---
-// It's better to initialize this once and reuse it.
 const supabaseUrl = "https://urfibhtfqgffpanpsjds.supabase.co";
 const supabaseServiceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVyZmliaHRmcWdmZnBhbnBzamRzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNTc4NTY0NSwiZXhwIjoyMDUxMzYxNjQ1fQ.fHIeQZR1l_lGPV7hYJkcahkEvYytIBpasXOg4m1atAs";
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+    global: {
+        fetch: crossFetch,
+    },
+});
 const STORAGE_BUCKET_NAME = 'product-images';
 
 // --- Reusable Font Loading ---
@@ -28,18 +32,14 @@ async function getFontData() {
     }
 }
 
-// --- CORE LOGIC: GENERATE IMAGE BUFFER ---
-export async function generateImageBufferFromText(text: string): Promise<Buffer> {
+// --- V3: Main generation logic for complex HTML from AI ---
+export async function generateImageBufferFromHtml(htmlContent: string): Promise<Buffer> {
     const font = await getFontData();
-    const template = html(`
-        <div style="display: flex; height: 100%; width: 100%; align-items: center; justify-content: center; background-image: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); font-family: 'Noto Sans SC'; padding: 60px; text-align: center; color: #333; line-height: 1.8; font-size: 48px; white-space: pre-wrap; word-wrap: break-word;">
-            ${text}
-        </div>
-    `);
+    const template = html(htmlContent);
 
     const svg = await satori(template as React.ReactNode, {
         width: 1080,
-        height: 1080,
+        height: 1350, // Optimal for social media like Xiaohongshu
         fonts: [{
             name: 'Noto Sans SC',
             data: font,
@@ -48,8 +48,32 @@ export async function generateImageBufferFromText(text: string): Promise<Buffer>
         }],
     });
 
-    return sharp(Buffer.from(svg)).png().toBuffer();
-        }
+    return sharp(Buffer.from(svg)).png({ quality: 90 }).toBuffer();
+}
+
+// --- V3: Fallback generator for simple text ---
+export async function generateSimpleImageBuffer(text: string): Promise<Buffer> {
+    const font = await getFontData();
+    const simpleTemplate = html(`
+        <div style="display: flex; height: 100%; width: 100%; align-items: center; justify-content: center; background-image: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); font-family: 'Noto Sans SC'; padding: 80px; text-align: center; color: #333; line-height: 1.8; font-size: 52px; white-space: pre-wrap; word-wrap: break-word;">
+            ${text}
+        </div>
+    `);
+
+    const svg = await satori(simpleTemplate as React.ReactNode, {
+        width: 1080,
+        height: 1350, // Optimal for social media
+        fonts: [{
+            name: 'Noto Sans SC',
+            data: font,
+            weight: 400,
+            style: 'normal',
+        }],
+    });
+    
+    return sharp(Buffer.from(svg)).png({ quality: 90 }).toBuffer();
+}
+
 
 // --- CORE LOGIC: UPLOAD IMAGE TO SUPABASE ---
 export async function uploadImageToSupabase(imageBuffer: Buffer): Promise<string> {
@@ -65,7 +89,7 @@ export async function uploadImageToSupabase(imageBuffer: Buffer): Promise<string
     if (uploadError) {
         console.error('Supabase Storage upload error:', uploadError);
         throw new Error(`Failed to upload image to Supabase Storage. Details: ${uploadError.message}`);
-            }
+    }
 
     const { data: publicUrlData } = supabaseAdmin.storage
         .from(STORAGE_BUCKET_NAME)
@@ -76,4 +100,4 @@ export async function uploadImageToSupabase(imageBuffer: Buffer): Promise<string
     }
 
     return publicUrlData.publicUrl;
-} 
+}
